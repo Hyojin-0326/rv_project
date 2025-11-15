@@ -108,8 +108,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         bg = torch.rand((3), device="cuda") if opt.random_background else background
 
-        render_pkg = render(viewpoint_cam, gaussians, pipe, bg, use_trained_exp=dataset.train_test_exp, separate_sh=SPARSE_ADAM_AVAILABLE)
-        image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
+        render_pkg = render(viewpoint_cam, gaussians, pipe, bg, use_trained_exp=dataset.train_test_exp, separate_sh=SPARSE_ADAM_AVAILABLE, return_err=True)
+        image, viewspace_point_tensor, visibility_filter, radii, err_img = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"], render_pkg["err"]
 
         if viewpoint_cam.alpha_mask is not None:
             alpha_mask = viewpoint_cam.alpha_mask.cuda()
@@ -125,6 +125,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_value)
 
+
+        # ----------------------------
+        # L_aux 구성
+        # err_image = sum_k e_k * ω_k(u) 가 픽셀별로 들어있음                 # [1,H,W]
+        per_pix_err = (image - gt_image).abs().mean(0, keepdim=True).detach()  # [1,H,W], 
+        L_aux = (per_pix_err * err_img).sum()              # 스칼라
+        # ----------------------------
+
         # Depth regularization
         Ll1depth_pure = 0.0
         if depth_l1_weight(iteration) > 0 and viewpoint_cam.depth_reliable:
@@ -138,6 +146,29 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             Ll1depth = Ll1depth.item()
         else:
             Ll1depth = 0
+
+        # #debug
+        # print("e_k requires_grad:", gaussians.get_e_k.requires_grad)
+        # print("err_img requires_grad:", err_img.requires_grad)
+        # print("L_aux requires_grad:", L_aux.requires_grad)
+
+
+     
+        E_k_view = torch.autograd.grad(
+            L_aux,                      # = (per_pix_err * err_image).sum()
+            gaussians._e_k,
+            retain_graph=True,
+            allow_unused=False
+        )[0]
+
+        if E_k_view is None:
+            raise RuntimeError("E_k_view가 None입니다. e_k가 requires_grad=True인지, err 렌더가 e_k에 미분 가능하게 연결돼 있는지 확인하세요.")
+        E_k_view = E_k_view.detach().clone()
+
+        mask = E_k_view > gaussians.E_k # [N ,1], N = 가우시안 개수
+        gaussians.E_k[mask] = E_k_view[mask]
+
+        
 
         loss.backward()
 
@@ -168,7 +199,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                    gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold, radii)
+                    gaussians.densify_and_prune(0.1, 0.005, scene.cameras_extent, size_threshold, radii)
                 
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     gaussians.reset_opacity()

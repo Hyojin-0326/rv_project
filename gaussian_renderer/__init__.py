@@ -15,7 +15,9 @@ from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianR
 from scene.gaussian_model import GaussianModel
 from utils.sh_utils import eval_sh
 
-def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, separate_sh = False, override_color = None, use_trained_exp=False):
+def render(viewpoint_camera, pc: GaussianModel, pipe, bg_color: torch.Tensor,
+           scaling_modifier=1.0, separate_sh=False, override_color=None,
+           use_trained_exp=False, return_err=False):
     """
     Render the scene. 
     
@@ -108,7 +110,36 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
             scales = scales,
             rotations = rotations,
             cov3D_precomp = cov3D_precomp)
-        
+
+###
+    err_image = None
+    if return_err:
+        e_k = pc.get_e_k                      # [N,1]
+        N = e_k.shape[0]
+
+        # 기존 SH 텐서 shape 참고
+        feats = pc.get_features               # [N, C, 3]
+        Nf, n_coeff, ch = feats.shape        # ch=3
+
+        # [N, C, 3] SH 텐서 만들고, DC term(C=0)에만 e_k 넣기
+        shs_err = torch.zeros_like(feats)     # [N, C, 3]
+        e_rgb = e_k.expand(-1, 3)             # [N,3]
+        shs_err[:, 0, :] = e_rgb              # DC coefficient에만 e_k 넣음
+
+        err_image, _, _ = rasterizer(
+            means3D = means3D,
+            means2D = means2D,
+            shs = shs_err,                    # ✔ [N, C, 3] 레이아웃
+            colors_precomp = None,
+            opacities = opacity,
+            scales = scales,
+            rotations = rotations,
+            cov3D_precomp = cov3D_precomp
+        )
+            # 채널 1개만 쓰고 싶으면 첫 채널만 사용
+        err_image = err_image[:1, ...]   # [1,H,W]
+###
+            
     # Apply exposure to rendered image (training only)
     if use_trained_exp:
         exposure = pc.get_exposure_from_name(viewpoint_camera.image_name)
@@ -124,5 +155,8 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         "radii": radii,
         "depth" : depth_image
         }
+
+    out["err"] = err_image
     
     return out
+
