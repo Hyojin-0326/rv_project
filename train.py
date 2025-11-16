@@ -15,6 +15,7 @@ from random import randint
 from utils.loss_utils import l1_loss, ssim
 from gaussian_renderer import render, network_gui
 import sys
+import wandb
 from scene import Scene, GaussianModel
 from utils.general_utils import safe_state, get_expon_lr_func
 import uuid
@@ -41,7 +42,20 @@ except:
     SPARSE_ADAM_AVAILABLE = False
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
-
+    wandb.init(
+        project="gaussian-splatting-revisit",
+        name=f"{dataset.model_path.split('/')[-1]}-{opt.iterations}iters",
+        config={
+            "iterations": opt.iterations,
+            "position_lr": opt.position_lr_init,
+            "feature_lr": opt.feature_lr,
+            "scaling_lr": opt.scaling_lr,
+            "opacity_lr": opt.opacity_lr,
+            "densify_until": opt.densify_until_iter,
+            "model_path": dataset.model_path
+        },
+        settings=wandb.Settings(_disable_stats=False)  # ⬅️ 이것만 넣으면 자동 GPU 모니터링 켜짐
+    )
     if not SPARSE_ADAM_AVAILABLE and opt.optimizer_type == "sparse_adam":
         sys.exit(f"Trying to use sparse adam but it is not installed, please install the correct rasterizer using pip install [3dgs_accel].")
 
@@ -172,6 +186,24 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         loss.backward()
 
+        if iteration % 10 == 0: # ⬅️ 너무 자주 기록하면 오버헤드가 있으므로 조절
+            log_data = {
+                "iteration": iteration,
+                "total_loss": loss.item(),
+                "L1_loss": Ll1.item(),
+                "L_aux": L_aux.item() if L_aux > 0 else 0,
+                "total_points": gaussians.get_xyz.shape[0]
+            }
+            
+            # (선택) PSNR도 함께 기록 (테스트 시)
+            if iteration in testing_iterations:
+                # ... (PSNR 계산 로직) ...
+                # log_data["test_psnr"] = psnr_value 
+                pass
+
+            wandb.log(log_data)
+
+
         iter_end.record()
 
         with torch.no_grad():
@@ -193,14 +225,34 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
             # Densification
             if iteration < opt.densify_until_iter:
+
+                cur_N = gaussians.get_xyz.shape[0]
+                MAX_N = opt.max_points if hasattr(opt, "max_points") else 2_500_000 
+
+                allow_grow = cur_N < MAX_N
+
+
                 # Keep track of max radii in image-space for pruning
                 gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
                 gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
 
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                    gaussians.densify_and_prune(0.1, 0.005, scene.cameras_extent, size_threshold, radii)
-                
+                    print(
+                    "iter", iteration,
+                    "N", gaussians.get_xyz.shape[0],
+                    "E_k min", gaussians.E_k.min().item(), 
+                    "E_k max", gaussians.E_k.max().item(),
+                    "whohasmaxE_k", torch.argmax(gaussians.E_k).item()
+                )
+
+                    if allow_grow:
+                        gaussians.densify_and_prune(0.1, 0.005, scene.cameras_extent, size_threshold, radii)
+                    else:
+                        gaussians.prune_points(gaussians.get_opacity < 0.005)
+                    gaussians.reset_Ek()
+
+                            
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     gaussians.reset_opacity()
 

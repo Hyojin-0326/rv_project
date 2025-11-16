@@ -8,3 +8,6 @@ tensorboard_3d
 screenshots
 submodules
 data
+output
+wandb
+data.zip

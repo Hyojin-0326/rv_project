@@ -436,14 +436,34 @@ class GaussianModel:
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
-    def densify_and_split(self, E_k, E_k_thr, scene_extent, N=2):
-        n_init_points = self.get_xyz.shape[0] 
+    def densify_and_split(self, E_k, E_k_thr, scene_extent, N=2, max_frac_new = 0.05):
+
+        current_N = E_k.shape[0]
+        scores = torch.norm(E_k, dim=-1)
+        base_mask = self.get_scaling.max(dim=1).values[:current_N] > self.percent_dense*scene_extent # 스케일링 작은거(공분산 작은거) 제외
+        cand = torch.nonzero((scores >= E_k_thr) & base_mask.squeeze(-1), as_tuple=False).squeeze(-1)
+
+        max_new = int(self.get_xyz.shape[0] * max_frac_new)
+        if max_new <= 0 or cand.numel() == 0:
+            return 
+        
+        if(cand.numel() > max_new):
+            vals = scores[cand]
+            topk = torch.topk(vals, max_new, sorted = False).indices
+            cand = cand[topk]
+
+        selected_pts_mask = torch.zeros(self.get_xyz.shape[0], dtype=torch.bool, device="cuda")
+        selected_pts_mask[cand] = True
+
+
+
+        # n_init_points = self.get_xyz.shape[0] 
         # Extract points that satisfy the gradient condition
-        padded_E_k = torch.zeros((n_init_points), device="cuda")
-        padded_E_k[:E_k.shape[0]] = E_k.squeeze()
-        selected_pts_mask = torch.where(padded_E_k >= E_k_thr, True, False)
-        selected_pts_mask = torch.logical_and(selected_pts_mask,
-                                              torch.max(self.get_scaling, dim=1).values > self.percent_dense*scene_extent)
+        # padded_E_k = torch.zeros((n_init_points), device="cuda")
+        # padded_E_k[:E_k.shape[0]] = E_k.squeeze()
+        # selected_pts_mask = torch.where(padded_E_k >= E_k_thr, True, False)
+        # selected_pts_mask = torch.logical_and(selected_pts_mask,
+        #                                       torch.max(self.get_scaling, dim=1).values > self.percent_dense*scene_extent)
 
         stds = self.get_scaling[selected_pts_mask].repeat(N,1)
         means =torch.zeros((stds.size(0), 3),device="cuda")
@@ -462,11 +482,30 @@ class GaussianModel:
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
 
-    def densify_and_clone(self, E_k, E_k_thr, scene_extent):
-        # Extract points that satisfy the gradient condition
-        selected_pts_mask = torch.where(torch.norm(E_k, dim=-1) >= E_k_thr, True, False)
-        selected_pts_mask = torch.logical_and(selected_pts_mask,
-                                              torch.max(self.get_scaling, dim=1).values <= self.percent_dense*scene_extent)
+    def densify_and_clone(self, E_k, E_k_thr, scene_extent, max_frac_new = 0.05):
+
+
+        current_N = E_k.shape[0]
+        scores = torch.norm(E_k, dim=-1)
+        base_mask = self.get_scaling.max(dim=1).values[:current_N] > (self.percent_dense * scene_extent) # 스케일링 큰거(공분산 큰거) 제외
+        cand = torch.nonzero((scores >= E_k_thr) & base_mask.squeeze(-1), as_tuple=False).squeeze(-1)
+        max_new = int(self.get_xyz.shape[0] * max_frac_new)
+
+        if max_new <= 0 or cand.numel() == 0:
+            return
+
+        if(cand.numel() > max_new):
+            vals = scores[cand]
+            topk = torch.topk(vals, max_new, sorted = False).indices
+            cand = cand[topk]
+
+        selected_pts_mask = torch.zeros_like(base_mask, dtype=torch.bool)
+        selected_pts_mask[cand] = True
+
+        # # Extract points that satisfy the gradient condition
+        # selected_pts_mask = torch.where(torch.norm(E_k, dim=-1) >= E_k_thr, True, False)
+        # selected_pts_mask = torch.logical_and(selected_pts_mask,
+        #                                       torch.max(self.get_scaling, dim=1).values <= self.percent_dense*scene_extent)
         
         new_xyz = self._xyz[selected_pts_mask]
         new_features_dc = self._features_dc[selected_pts_mask]
@@ -481,8 +520,11 @@ class GaussianModel:
 
     def densify_and_prune(self, E_k_thr, min_opacity, extent, max_screen_size, radii):
 
+        num_pts_before = self.get_xyz.shape[0]
+        E_k = self.E_k[:num_pts_before]
+
         self.tmp_radii = radii
-        E_k = self.E_k
+       
         self.densify_and_clone(E_k, E_k_thr, extent)
         self.densify_and_split(E_k, E_k_thr, extent)
 
@@ -493,9 +535,30 @@ class GaussianModel:
             prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
         self.prune_points(prune_mask)
         self.tmp_radii = None
+        
 
         torch.cuda.empty_cache()
 
     def add_densification_stats(self, viewspace_point_tensor, update_filter):
         self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True)
         self.denom[update_filter] += 1
+
+    def reset_Ek(self):
+        """
+        ADC 윈도우 종료 후 E_k, _e_k를 완전히 초기화하는 함수.
+        - E_k: 누적된 per-Gaussian error metric
+        - _e_k: autograd용 파라미터 (optimizer state까지 리셋)
+        """
+        # 1) E_k 초기화 (단순 zero)
+        self.E_k.zero_()
+
+        # 2) _e_k 파라미터 자체를 새로 생성하여 optimizer state도 리셋
+        new_e_k = nn.Parameter(torch.zeros_like(self._e_k), requires_grad=True)
+        self._e_k = new_e_k
+
+        # optimizer가 존재하면 (_e_k 아직 optimizer param에 안 들어있다면) state 생성
+        if hasattr(self, "optimizer") and self.optimizer is not None:
+            self.optimizer.state[self._e_k] = {
+                "exp_avg": torch.zeros_like(self._e_k),
+                "exp_avg_sq": torch.zeros_like(self._e_k),
+            }
