@@ -553,12 +553,13 @@ class GaussianModel:
         self.E_k.zero_()
 
         # 2) _e_k 파라미터 자체를 새로 생성하여 optimizer state도 리셋
-        new_e_k = nn.Parameter(torch.zeros_like(self._e_k), requires_grad=True)
-        self._e_k = new_e_k
+        self._e_k = nn.Parameter(torch.zeros_like(self._e_k), requires_grad=True)
+      
+      
+    def max_radii2D_restrict(self, max_value):
+        prune_mask = (self.max_radii2D > max_value).squeeze()
 
-        # optimizer가 존재하면 (_e_k 아직 optimizer param에 안 들어있다면) state 생성
-        if hasattr(self, "optimizer") and self.optimizer is not None:
-            self.optimizer.state[self._e_k] = {
-                "exp_avg": torch.zeros_like(self._e_k),
-                "exp_avg_sq": torch.zeros_like(self._e_k),
-            }
+        if prune_mask.any():
+            self.prune_points(prune_mask)
+        
+        torch.cuda.empty_cache()

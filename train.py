@@ -11,6 +11,7 @@
 
 import os
 import torch
+import logging
 from random import randint
 from utils.loss_utils import l1_loss, ssim
 from gaussian_renderer import render, network_gui
@@ -40,6 +41,23 @@ try:
     SPARSE_ADAM_AVAILABLE = True
 except:
     SPARSE_ADAM_AVAILABLE = False
+
+def memlog(msg=""):
+    alloc = torch.cuda.memory_allocated() / 1024**2
+    resa = torch.cuda.memory_reserved() / 1024**2
+    logging.debug(f"[{msg}] alloc={alloc:.1f}MB reserved={resa:.1f}MB")
+
+def print_grad_tensors(model):
+    for name, t in model.__dict__.items():
+        if torch.is_tensor(t):
+            if t.grad_fn is not None:
+                logging.debug(f"⚠️ grad_fn alive: {name}, shape={t.shape}, fn={t.grad_fn}")
+
+def log_tensor_stats(model, prefix = ""):
+    for name, t in model.__dict__.items():
+        if torch.is_tensor(t):
+            logging.debug(f"{prefix}{name}: mean={t.mean().item():.6f}, std={t.std().item():.6f}, min={t.min().item():.6f}, max={t.max().item():.6f}")
+
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
     wandb.init(
@@ -84,6 +102,13 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
+
+    logging.basicConfig(
+        filename='memlog.txt',
+        level=logging.DEBUG,
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
+
     for iteration in range(first_iter, opt.iterations + 1):
         if network_gui.conn == None:
             network_gui.try_connect()
@@ -124,6 +149,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         render_pkg = render(viewpoint_cam, gaussians, pipe, bg, use_trained_exp=dataset.train_test_exp, separate_sh=SPARSE_ADAM_AVAILABLE, return_err=True)
         image, viewspace_point_tensor, visibility_filter, radii, err_img = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"], render_pkg["err"]
+        
 
         if viewpoint_cam.alpha_mask is not None:
             alpha_mask = viewpoint_cam.alpha_mask.cuda()
@@ -171,9 +197,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         E_k_view = torch.autograd.grad(
             L_aux,                      # = (per_pix_err * err_image).sum()
             gaussians._e_k,
-            retain_graph=True,
+            retain_graph=False,
             allow_unused=False
         )[0]
+        err_img = err_img.detach()
 
         if E_k_view is None:
             raise RuntimeError("E_k_view가 None입니다. e_k가 requires_grad=True인지, err 렌더가 e_k에 미분 가능하게 연결돼 있는지 확인하세요.")
@@ -185,6 +212,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         
 
         loss.backward()
+        
 
         if iteration % 10 == 0: # ⬅️ 너무 자주 기록하면 오버헤드가 있으므로 조절
             log_data = {
@@ -237,7 +265,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
 
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
-                    size_threshold = 20 if iteration > opt.opacity_reset_interval else None
+                    # size_threshold = 20 if iteration > opt.opacity_reset_interval else None
+                    #max radii 올라가면 아예 없애는거로 하드코딩함, 나중에 바꿔야 함
+                    size_threshold = 20
+                    gaussians.max_radii2D_restrict(max_value= 500.0)  # max_radii2D가 500픽셀 넘는 가우시안은 제거, 하드코딩함
+
+                    
                     print(
                     "iter", iteration,
                     "N", gaussians.get_xyz.shape[0],
@@ -271,6 +304,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
+            
+            if iteration % 50 == 0:
+                memlog()
+                log_tensor_stats(gaussians, prefix=f"Iteration {iteration} - ")
+                print_grad_tensors(gaussians)
+                
 
 def prepare_output_and_logger(args):    
     if not args.model_path:
