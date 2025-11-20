@@ -19,7 +19,7 @@ import wandb
 from scene import Scene, GaussianModel
 from utils.general_utils import safe_state, get_expon_lr_func
 import uuid
-from tqdm import tqdm
+from tqdm.auto import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
@@ -43,7 +43,7 @@ except:
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
     wandb.init(
-        project="gaussian-splatting-revisit",
+        project="gaussian-splatting",
         name=f"{dataset.model_path.split('/')[-1]}-{opt.iterations}iters",
         config={
             "iterations": opt.iterations,
@@ -137,15 +137,18 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         else:
             ssim_value = ssim(image, gt_image)
 
-        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_value)
 
 
+        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_value) 
         # ----------------------------
         # L_aux 구성
         # err_image = sum_k e_k * ω_k(u) 가 픽셀별로 들어있음                 # [1,H,W]
+        alpha = 1e-6
         per_pix_err = (image - gt_image).abs().mean(0, keepdim=True).detach()  # [1,H,W], 
         L_aux = (per_pix_err * err_img).sum()              # 스칼라
         # ----------------------------
+
+
 
         # Depth regularization
         Ll1depth_pure = 0.0
@@ -166,25 +169,37 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         # print("err_img requires_grad:", err_img.requires_grad)
         # print("L_aux requires_grad:", L_aux.requires_grad)
 
+        loss_total = L_aux * alpha + loss
+        loss_total.backward()
 
+        with torch.no_grad():
+            # d(loss_total)/d e_k = alpha * E_k_view  (main loss는 e_k에 의존X)
+            E_k_view = (gaussians._e_k.grad / alpha).detach().clone()  # [N,1]
+
+            # 한 번 사용했으면 grad 비워주기 (optimizer가 안 관리하니까 직접)
+            gaussians._e_k.grad.zero_()
+
+            # view별 최대값 유지
+            mask = E_k_view > gaussians.E_k
+            gaussians.E_k[mask] = E_k_view[mask]
      
-        E_k_view = torch.autograd.grad(
-            L_aux,                      # = (per_pix_err * err_image).sum()
-            gaussians._e_k,
-            retain_graph=True,
-            allow_unused=False
-        )[0]
 
-        if E_k_view is None:
-            raise RuntimeError("E_k_view가 None입니다. e_k가 requires_grad=True인지, err 렌더가 e_k에 미분 가능하게 연결돼 있는지 확인하세요.")
-        E_k_view = E_k_view.detach().clone()
+        """
+                E_k_view = torch.autograd.grad(
+                    L_aux,                      # = (per_pix_err * err_image).sum()
+                    gaussians._e_k,
+                    retain_graph=True,
+                    allow_unused=False
+                )[0]
 
-        mask = E_k_view > gaussians.E_k # [N ,1], N = 가우시안 개수
-        gaussians.E_k[mask] = E_k_view[mask]
+                if E_k_view is None:
+                    raise RuntimeError("E_k_view가 None입니다. e_k가 requires_grad=True인지, err 렌더가 e_k에 미분 가능하게 연결돼 있는지 확인하세요.")
+                E_k_view = E_k_view.detach().clone()
 
-        
+                mask = E_k_view > gaussians.E_k # [N ,1], N = 가우시안 개수
+                gaussians.E_k[mask] = E_k_view[mask]
+        """
 
-        loss.backward()
 
         if iteration % 10 == 0: # ⬅️ 너무 자주 기록하면 오버헤드가 있으므로 조절
             log_data = {
@@ -249,7 +264,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     if allow_grow:
                         gaussians.densify_and_prune(0.1, 0.005, scene.cameras_extent, size_threshold, radii)
                     else:
-                        gaussians.prune_points(gaussians.get_opacity < 0.005)
+                        gaussians.prune_points((gaussians.get_opacity < 0.005).squeeze())
                     gaussians.reset_Ek()
 
                             
