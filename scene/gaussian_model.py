@@ -488,7 +488,7 @@ class GaussianModel:
         current_N = E_k.shape[0]
         scores = torch.norm(E_k, dim=-1)
         base_mask = self.get_scaling.max(dim=1).values[:current_N] > (self.percent_dense * scene_extent) # 스케일링 큰거(공분산 큰거) 제외
-        cand = torch.nonzero((scores >= E_k_thr) & base_mask.squeeze(-1), as_tuple=False).squeeze(-1)
+        cand = torch.nonzero((scores >= E_k_thr) & ~base_mask.squeeze(-1), as_tuple=False).squeeze(-1)
         max_new = int(self.get_xyz.shape[0] * max_frac_new)
 
         if max_new <= 0 or cand.numel() == 0:
@@ -556,10 +556,12 @@ class GaussianModel:
         self._e_k = nn.Parameter(torch.zeros_like(self._e_k), requires_grad=True)
       
       
-    def max_radii2D_restrict(self, max_value):
-        prune_mask = (self.max_radii2D > max_value).squeeze()
+    # def max_radii2D_restrict(self, max_value):
+    #     prune_mask = (self.max_radii2D > max_value).squeeze()
+    #     self.tmp_radii = radii
+    #     print(f"Max radii: {self.max_radii2D.max().item()} Number of Gaussians to prune: {prune_mask.sum().item()} / {self.get_xyz.shape[0]}")
 
-        if prune_mask.any():
-            self.prune_points(prune_mask)
+    #     if prune_mask.any():
+    #         self.prune_points(prune_mask)
         
-        torch.cuda.empty_cache()
+    #     torch.cuda.empty_cache()

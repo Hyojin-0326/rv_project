@@ -42,21 +42,51 @@ try:
 except:
     SPARSE_ADAM_AVAILABLE = False
 
-def memlog(msg=""):
+import logging
+
+def setup_file_logger():
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)
+
+    # 기존 핸들러 제거
+    while logger.handlers:
+        logger.handlers.pop()
+
+    # 파일 핸들러만 추가
+    fh = logging.FileHandler("memlog.txt")
+    fh.setLevel(logging.DEBUG)
+    fh.setFormatter(logging.Formatter(
+        "%(asctime)s | %(levelname)s | %(message)s"
+    ))
+
+    logger.addHandler(fh)
+    return logger
+
+logger = setup_file_logger()
+
+def memlog(tag=""):
     alloc = torch.cuda.memory_allocated() / 1024**2
-    resa = torch.cuda.memory_reserved() / 1024**2
-    logging.debug(f"[{msg}] alloc={alloc:.1f}MB reserved={resa:.1f}MB")
+    resa  = torch.cuda.memory_reserved() / 1024**2
+
+    logger.info(
+        f"[{tag}] alloc={alloc:.1f}MB | reserved={resa:.1f}MB"
+    )
+
+def tensor_stats(t):
+    return f"mean={t.mean():.3e}, std={t.std():.3e}, min={t.min():.3e}, max={t.max():.3e}"
+
+def log_tensor_stats(model, prefix=""):
+    for name, t in model.__dict__.items():
+        if torch.is_tensor(t):
+            logger.debug(f"{prefix}{name}: {tensor_stats(t)}")
+
+    s = model.get_scaling
+    logger.debug(f"{prefix}scaling: {tensor_stats(s)}")
 
 def print_grad_tensors(model):
     for name, t in model.__dict__.items():
-        if torch.is_tensor(t):
-            if t.grad_fn is not None:
-                logging.debug(f"⚠️ grad_fn alive: {name}, shape={t.shape}, fn={t.grad_fn}")
-
-def log_tensor_stats(model, prefix = ""):
-    for name, t in model.__dict__.items():
-        if torch.is_tensor(t):
-            logging.debug(f"{prefix}{name}: mean={t.mean().item():.6f}, std={t.std().item():.6f}, min={t.min().item():.6f}, max={t.max().item():.6f}")
+        if torch.is_tensor(t) and t.grad_fn is not None:
+            logger.warning(f"grad_fn alive: {name} shape={t.shape} fn={t.grad_fn}")
 
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
@@ -102,12 +132,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
-
-    logging.basicConfig(
-        filename='memlog.txt',
-        level=logging.DEBUG,
-        format='%(asctime)s - %(levelname)s - %(message)s'
-    )
 
     for iteration in range(first_iter, opt.iterations + 1):
         if network_gui.conn == None:
@@ -267,8 +291,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                     # size_threshold = 20 if iteration > opt.opacity_reset_interval else None
                     #max radii 올라가면 아예 없애는거로 하드코딩함, 나중에 바꿔야 함
-                    size_threshold = 20
-                    gaussians.max_radii2D_restrict(max_value= 500.0)  # max_radii2D가 500픽셀 넘는 가우시안은 제거, 하드코딩함
+                    size_threshold = 20 # < max_screen size 인자로 전달됨
+                    # max_radii2D_restrict_value = 500.0
+                    # gaussians.max_radii2D_restrict(max_value= max_radii2D_restrict_value)  # radii2D가 500픽셀 넘는 가우시안은 제거, 하드코딩함
 
                     
                     print(
@@ -276,7 +301,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     "N", gaussians.get_xyz.shape[0],
                     "E_k min", gaussians.E_k.min().item(), 
                     "E_k max", gaussians.E_k.max().item(),
-                    "whohasmaxE_k", torch.argmax(gaussians.E_k).item()
                 )
 
                     if allow_grow:
@@ -306,10 +330,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
             
             if iteration % 50 == 0:
-                memlog()
-                log_tensor_stats(gaussians, prefix=f"Iteration {iteration} - ")
+                logger.info(f"--- Iter {iteration} ---")
+                memlog(f"iter {iteration}")
+                log_tensor_stats(gaussians, prefix=f"[iter {iteration}] ")
                 print_grad_tensors(gaussians)
-                
 
 def prepare_output_and_logger(args):    
     if not args.model_path:
