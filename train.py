@@ -177,7 +177,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             E_k_view = (gaussians._e_k.grad / alpha).detach().clone()  # [N,1]
 
             # 한 번 사용했으면 grad 비워주기 (optimizer가 안 관리하니까 직접)
-            gaussians._e_k.grad.zero_()
+            # gaussians._e_k.grad.zero_()
 
             # view별 최대값 유지
             mask = E_k_view > gaussians.E_k
@@ -252,7 +252,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
 
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
-                    size_threshold = 20 if iteration > opt.opacity_reset_interval else None
+                    # size_threshold = 20 if iteration > opt.opacity_reset_interval else None
+                    size_threshold = 20 # 일단 하드코딩해놓음
                     print(
                     "iter", iteration,
                     "N", gaussians.get_xyz.shape[0],
