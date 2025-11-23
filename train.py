@@ -286,11 +286,19 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
             # Densification
             if iteration < opt.densify_until_iter:
+                
+                # cur_N = gaussians.get_xyz.shape[0]
+                # allow_growth = int(cur_N*0.1)  # 현재 개수의 10% 만큼 허용
 
-                cur_N = gaussians.get_xyz.shape[0]
-                MAX_N = opt.max_points if hasattr(opt, "max_points") else 4_500_000 
+                # if hassattr(opt, "max_points"):
+                #     allow_grow = (cur_N+allow_growth) < opt.max_points if hasattr(opt, "max_points")
+                # else:
+                #     allow_grow = (cur_N+allow_growth) < 
 
-                allow_grow = cur_N < MAX_N
+
+                # 일단 무조건 grow 허용... 사실  gt가 있는 거 아니면 max N 을 모르니까 결과가 안나와서
+                # 발표때 어찌저찌 입털거아니면 max N 을 놓는게 의미가 없어보임
+                allow_grow = True
 
 
                 # Keep track of max radii in image-space for pruning
@@ -298,8 +306,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
 
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
-                    # size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                    size_threshold = 20 # 일단 하드코딩해놓음
+                    size_threshold = 20 if iteration > opt.opacity_reset_interval else None
                     print(
                     "iter", iteration,
                     "N", gaussians.get_xyz.shape[0],
@@ -324,7 +331,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                         idx = int(num_gaussians*(1.0 - top_frac))
                         E_k_thr = torch.kthvalue(E_K, idx).values.item()
                         print(f"Densification E_k threshold: {E_k_thr}")
-                        gaussians.densify_and_prune(E_k_thr, 0.005, scene.cameras_extent, size_threshold, radii)
+                        gaussians.densify_and_prune(E_k_thr,0.005, scene.cameras_extent, size_threshold, radii, 0.02)
+
+                        # 여기서 맹점이 가우시안 자체가 많으면 5퍼든 2퍼든 개커질수밖에 없음. 노말라이즈를 한번 하든지(이터레이션이나 현재 가우시안 수로)
+                        # 아니면 한 번에 커질 수를 절대적으로 정하는것도...
                     else:
                         gaussians.prune_points((gaussians.get_opacity < 0.005).squeeze())
                     gaussians.reset_Ek()

@@ -443,7 +443,7 @@ class GaussianModel:
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
-    def densify_and_split(self, E_k, E_k_thr, scene_extent, N=2, max_frac_new = 0.005):
+    def densify_and_split(self, E_k, E_k_thr, scene_extent,max_frac_new,  N=2):
 
         current_N = E_k.shape[0]
         scores = torch.norm(E_k, dim=-1)
@@ -489,7 +489,7 @@ class GaussianModel:
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
 
-    def densify_and_clone(self, E_k, E_k_thr, scene_extent, max_frac_new = 0.05):
+    def densify_and_clone(self, E_k, E_k_thr, scene_extent, max_frac_new):
 
 
         current_N = E_k.shape[0]
@@ -527,15 +527,15 @@ class GaussianModel:
 
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_tmp_radii)
 
-    def densify_and_prune(self, E_k_thr, min_opacity, extent, max_screen_size, radii):
+    def densify_and_prune(self, E_k_thr, min_opacity, extent, max_screen_size, radii, max_frac_new=0.05):
 
         num_pts_before = self.get_xyz.shape[0]
         E_k = self.E_k[:num_pts_before]
 
         self.tmp_radii = radii
        
-        self.densify_and_clone(E_k, E_k_thr, extent)
-        self.densify_and_split(E_k, E_k_thr, extent)
+        self.densify_and_clone(E_k, E_k_thr, extent, max_frac_new)
+        self.densify_and_split(E_k, E_k_thr, extent, max_frac_new)
 
         prune_mask = (self.get_opacity < min_opacity).squeeze()
         if max_screen_size:
