@@ -517,7 +517,9 @@ class GaussianModel:
         new_xyz = self._xyz[selected_pts_mask]
         new_features_dc = self._features_dc[selected_pts_mask]
         new_features_rest = self._features_rest[selected_pts_mask]
-        new_opacities = self._opacity[selected_pts_mask]
+        
+        corrected_opacities = 1.0 - torch.sqrt(torch.clamp(1.0 - self._opacity[selected_pts_mask], min=1e-6))
+        new_opacities = corrected_opacities
         new_scaling = self._scaling[selected_pts_mask]
         new_rotation = self._rotation[selected_pts_mask]
 
