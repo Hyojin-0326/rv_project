@@ -19,6 +19,7 @@ import wandb
 from scene import Scene, GaussianModel
 from utils.general_utils import safe_state, get_expon_lr_func
 import uuid
+import logging
 from tqdm.auto import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
@@ -40,6 +41,51 @@ try:
     SPARSE_ADAM_AVAILABLE = True
 except:
     SPARSE_ADAM_AVAILABLE = False
+
+def setup_file_logger():
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)
+
+    # 기존 핸들러 제거
+    while logger.handlers:
+        logger.handlers.pop()
+
+    # 파일 핸들러만 추가
+    fh = logging.FileHandler("memlog.txt")
+    fh.setLevel(logging.DEBUG)
+    fh.setFormatter(logging.Formatter(
+        "%(asctime)s | %(levelname)s | %(message)s"
+    ))
+
+    logger.addHandler(fh)
+    return logger
+
+logger = setup_file_logger()
+
+def memlog(tag=""):
+    alloc = torch.cuda.memory_allocated() / 1024**2
+    resa  = torch.cuda.memory_reserved() / 1024**2
+
+    logger.info(
+        f"[{tag}] alloc={alloc:.1f}MB | reserved={resa:.1f}MB"
+    )
+
+def tensor_stats(t):
+    return f"mean={t.mean():.3e}, std={t.std():.3e}, min={t.min():.3e}, max={t.max():.3e}"
+
+def log_tensor_stats(model, prefix=""):
+    for name, t in model.__dict__.items():
+        if torch.is_tensor(t):
+            logger.debug(f"{prefix}{name}: {tensor_stats(t)}")
+
+    s = model.get_scaling
+    logger.debug(f"{prefix}scaling: {tensor_stats(s)}")
+
+def print_grad_tensors(model):
+    for name, t in model.__dict__.items():
+        if torch.is_tensor(t) and t.grad_fn is not None:
+            logger.warning(f"grad_fn alive: {name} shape={t.shape} fn={t.grad_fn}")
+
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
     wandb.init(
@@ -242,7 +288,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if iteration < opt.densify_until_iter:
 
                 cur_N = gaussians.get_xyz.shape[0]
-                MAX_N = opt.max_points if hasattr(opt, "max_points") else 2_500_000 
+                MAX_N = opt.max_points if hasattr(opt, "max_points") else 4_500_000 
 
                 allow_grow = cur_N < MAX_N
 
@@ -262,8 +308,23 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     "whohasmaxE_k", torch.argmax(gaussians.E_k).item()
                 )
 
+                    #❗ problem: the # of gaussians explodes...
+                    # => we need to prune more aggressively
+                    #optinon1: increase the opacity threshold for pruning
+                    #option2: increase E_K threshold for densification
+
+                    #original thresholds- opacity: 0.005, E_K: 0.1
                     if allow_grow:
-                        gaussians.densify_and_prune(0.1, 0.005, scene.cameras_extent, size_threshold, radii)
+                        
+                        #❗일단 E_K의 상위 20퍼 값을 찾고 그걸 스레스홀드로 걸긴 했는데. 이러면 densification에서 5퍼씩의 제한을 걸 필요가 없을 것 같기도함.
+                        #아니면 split/clone에서 각각 5퍼씩 키우지 말고, 전체에서 10처를 증가시킨 값을 max_num_gaussians로 놓고 걔네들을 split/clone하는 방법도? 
+                        num_gaussians = gaussians.get_xyz.shape[0]
+                        E_K = gaussians.E_k[:num_gaussians].squeeze()
+                        top_frac = 0.2
+                        idx = int(num_gaussians*(1.0 - top_frac))
+                        E_k_thr = torch.kthvalue(E_K, idx).values.item()
+                        print(f"Densification E_k threshold: {E_k_thr}")
+                        gaussians.densify_and_prune(E_k_thr, 0.005, scene.cameras_extent, size_threshold, radii)
                     else:
                         gaussians.prune_points((gaussians.get_opacity < 0.005).squeeze())
                     gaussians.reset_Ek()
@@ -287,6 +348,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
+            
+            if iteration % 50 == 0:
+                logger.info(f"--- Iter {iteration} ---")
+                memlog(f"iter {iteration}")
+                log_tensor_stats(gaussians, prefix=f"[iter {iteration}] ")
+                print_grad_tensors(gaussians)
 
 def prepare_output_and_logger(args):    
     if not args.model_path:

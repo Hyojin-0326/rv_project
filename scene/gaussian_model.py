@@ -326,7 +326,7 @@ class GaussianModel:
         self._opacity = nn.Parameter(torch.tensor(opacities, dtype=torch.float, device="cuda").requires_grad_(True))
         self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True))
         self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
-        self._e_k = torch.zeros_like(self._opacity, device="cuda",, requires_grad=True)
+        self._e_k = torch.zeros_like(self._opacity, device="cuda",  requires_grad=True)
         self.E_k = torch.zeros_like(self._opacity, device="cuda")
         self.active_sh_degree = self.max_sh_degree
 
@@ -432,7 +432,7 @@ class GaussianModel:
         new_count = new_xyz.shape[0]
         zeros_ek = torch.zeros((new_count, 1), device="cuda")
 
-        # 일단 detach 하고 돌려봄
+        # ❗일단 detach 하고 돌려봄
         self._e_k = torch.cat((self._e_k, zeros_ek), dim=0).detach().requires_grad_(True)
 
         #add E_k
