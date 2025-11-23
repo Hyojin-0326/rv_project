@@ -11,3 +11,4 @@ data
 output
 wandb
 data.zip
+memlog.txt
