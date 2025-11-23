@@ -494,7 +494,7 @@ class GaussianModel:
 
         current_N = E_k.shape[0]
         scores = torch.norm(E_k, dim=-1)
-        base_mask = self.get_scaling.max(dim=1).values[:current_N] > (self.percent_dense * scene_extent) # 스케일링 큰거(공분산 큰거) 제외
+        base_mask = self.get_scaling.max(dim=1).values[:current_N] <= (self.percent_dense * scene_extent) # 스케일링 큰거(공분산 큰거) 제외
         cand = torch.nonzero((scores >= E_k_thr) & base_mask.squeeze(-1), as_tuple=False).squeeze(-1)
         max_new = int(self.get_xyz.shape[0] * max_frac_new)
 
