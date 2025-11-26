@@ -598,19 +598,25 @@ class GaussianModel:
         # kthvalue: k는 1-based index
         E_k_thr = torch.kthvalue(E_k, k).values.item()
 
-        return E_k, E_k_thr
+        return E_k_thr
 
 
-    def count_error(self, quantile_frac = 0.1):
+    def count_error(self, quantile_frac = 0.1, top_frac=0.2):
         E_k = self.E_k.squeeze()
 
-        local_quantile_thr = torch.quantile(E_k, (1-quantile_frac), dim=1, keepdim=True)
+        local_quantile_thr = torch.quantile(E_k, (1-quantile_frac), dim=1, keepdim=True, method='farthest')
         
-        global_quantile_thr = torch.quantile(local_quantile_thr, (1-quantile_frac), dim=0)
+        global_quantile_thr = torch.quantile(local_quantile_thr, (1-quantile_frac), dim=0, method='farthest')
 
-        mask = (local_thr > global_thr).squeeze(1)
+        mask = (local_quantile_thr > global_quantile_thr).squeeze(1)
 
-        return mask
+        k = int(len(mask)*(1-top_frac))
+        k = max(1, min(k, num_gaussians))
+
+        E_k_thr = torch.kthvalue(E_k, k).values.item()
+
+
+        return E_k_thr
 
         #일단 train 로직에 병합하지는 않았음. nonlinear error만 실험중... 
 

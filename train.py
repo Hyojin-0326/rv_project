@@ -322,14 +322,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
                     #original thresholds- opacity: 0.005, E_K: 0.1
                     if allow_grow:
-                        E_k, E_k_thr = gaussians.nonlinear_error()
+                        E_k_thr = gaussians.nonlinear_error()
                         print(f"Densification E_k threshold: {E_k_thr}")
                         gaussians.densify_and_prune(E_k_thr,0.005, scene.cameras_extent, size_threshold, radii, 0.02)
 
                         # 여기서 맹점이 가우시안 자체가 많으면 5퍼든 2퍼든 개커질수밖에 없음. 노말라이즈를 한번 하든지(이터레이션이나 현재 가우시안 수로)
                         # 아니면 한 번에 커질 수를 절대적으로 정하는것도...
                     else:
-                        gaussians.prune_points((gaussians.get_opacity < 0.005).squeeze())
+                        gaussians.prune_points((gaussians.get_opacity < 0.01).squeeze())
                     gaussians.reset_Ek()
 
                             
