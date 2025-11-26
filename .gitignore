@@ -12,3 +12,5 @@ output
 wandb
 data.zip
 memlog.txt
+data
+multi_train.sh 

@@ -272,9 +272,22 @@ class GaussianModel:
         PlyData([el]).write(path)
 
     def reset_opacity(self):
+        """
         opacities_new = self.inverse_opacity_activation(torch.min(self.get_opacity, torch.ones_like(self.get_opacity)*0.01))
         optimizable_tensors = self.replace_tensor_to_optimizer(opacities_new, "opacity")
         self._opacity = optimizable_tensors["opacity"]
+        """
+        pass
+    
+    def decay_opacity(self, delta=0.001, eps=1e-4):
+        with torch.no_grad():
+            cur_opacity = self.get_opacity          # [0,1]
+            new_opacity = (cur_opacity - delta).clamp(min=eps, max=1 - eps)
+            opacities_new = self.inverse_opacity_activation(new_opacity)
+
+        optimizable_tensors = self.replace_tensor_to_optimizer(opacities_new, "opacity")
+        self._opacity = optimizable_tensors["opacity"]
+
 
     def load_ply(self, path, use_train_test_exp = False):
         plydata = PlyData.read(path)
@@ -544,6 +557,8 @@ class GaussianModel:
             prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
         self.prune_points(prune_mask)
         self.tmp_radii = None
+        
+        self.decay_opacity(delta=0.001)
         
 
         torch.cuda.empty_cache()

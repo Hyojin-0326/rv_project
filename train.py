@@ -24,6 +24,9 @@ from tqdm.auto import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
+from subfunction import get_max_frac_new
+
+
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True
@@ -91,6 +94,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     wandb.init(
         project="gaussian-splatting",
         name=f"{dataset.model_path.split('/')[-1]}-{opt.iterations}iters",
+        
         config={
             "iterations": opt.iterations,
             "position_lr": opt.position_lr_init,
@@ -327,11 +331,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                         #아니면 split/clone에서 각각 5퍼씩 키우지 말고, 전체에서 10처를 증가시킨 값을 max_num_gaussians로 놓고 걔네들을 split/clone하는 방법도? 
                         num_gaussians = gaussians.get_xyz.shape[0]
                         E_K = gaussians.E_k[:num_gaussians].squeeze()
-                        top_frac = 0.2
+                        top_frac = 0.1
                         idx = int(num_gaussians*(1.0 - top_frac))
                         E_k_thr = torch.kthvalue(E_K, idx).values.item()
                         print(f"Densification E_k threshold: {E_k_thr}")
-                        gaussians.densify_and_prune(E_k_thr,0.005, scene.cameras_extent, size_threshold, radii, 0.02)
+                        max_frac_new = get_max_frac_new(iteration)
+                        gaussians.densify_and_prune(E_k_thr,0.02, scene.cameras_extent, size_threshold, radii, max_frac_new)
 
                         # 여기서 맹점이 가우시안 자체가 많으면 5퍼든 2퍼든 개커질수밖에 없음. 노말라이즈를 한번 하든지(이터레이션이나 현재 가우시안 수로)
                         # 아니면 한 번에 커질 수를 절대적으로 정하는것도...
@@ -339,10 +344,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                         gaussians.prune_points((gaussians.get_opacity < 0.005).squeeze())
                     gaussians.reset_Ek()
 
-                            
+                """          
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     gaussians.reset_opacity()
-
+                """
             # Optimizer step
             if iteration < opt.iterations:
                 gaussians.exposure_optimizer.step()
@@ -364,6 +369,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 memlog(f"iter {iteration}")
                 log_tensor_stats(gaussians, prefix=f"[iter {iteration}] ")
                 print_grad_tensors(gaussians)
+    wandb.finish()   
 
 def prepare_output_and_logger(args):    
     if not args.model_path:
