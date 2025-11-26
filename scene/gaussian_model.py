@@ -580,3 +580,37 @@ class GaussianModel:
         new_e_k = nn.Parameter(torch.zeros_like(self._e_k), requires_grad=True)
         self._e_k = new_e_k
 
+    ###### multi view E_k utils #####
+    def nonlinear_error(self, fn_type='softmax', p=2, a=2, top_frac=0.2):
+        import torch
+        import torch.nn.functional as F
+
+        num_gaussians = self._xyz.shape[0]
+
+        # E_k shape: [K] or [K,1,...] → flatten
+        E_k = self.E_k[:num_gaussians].squeeze()   # [K]
+
+        # ----------- nonlinear transforms -----------
+        if fn_type == 'f^p':
+            E_k = E_k ** p
+
+        elif fn_type == 'softplus':
+            # log(1+exp(a*x))
+            E_k = torch.log(1 + torch.exp(a * E_k))
+
+        elif fn_type == 'softmax':
+            # softmax over gaussians
+            E_k = F.softmax(E_k, dim=0)
+
+        else:
+            raise ValueError(f"Unknown fn_type: {fn_type}")
+
+        # ----------- compute top quantile threshold -----------
+        # e.g., top_frac=0.2 → 상위 20%를 의미
+        k = int(num_gaussians * (1.0 - top_frac))
+        k = max(1, min(k, num_gaussians))  # safe-guard
+
+        # kthvalue: k는 1-based index
+        E_k_thr = torch.kthvalue(E_k, k).values.item()
+
+        return E_k_thr

@@ -329,14 +329,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                         
                         #❗일단 E_K의 상위 20퍼 값을 찾고 그걸 스레스홀드로 걸긴 했는데. 이러면 densification에서 5퍼씩의 제한을 걸 필요가 없을 것 같기도함.
                         #아니면 split/clone에서 각각 5퍼씩 키우지 말고, 전체에서 10처를 증가시킨 값을 max_num_gaussians로 놓고 걔네들을 split/clone하는 방법도? 
-                        num_gaussians = gaussians.get_xyz.shape[0]
-                        E_K = gaussians.E_k[:num_gaussians].squeeze()
-                        top_frac = 0.1
-                        idx = int(num_gaussians*(1.0 - top_frac))
-                        E_k_thr = torch.kthvalue(E_K, idx).values.item()
+                        E_k_thr = gaussians.nonlinear_error()
                         print(f"Densification E_k threshold: {E_k_thr}")
-                        max_frac_new = get_max_frac_new(iteration)
-                        gaussians.densify_and_prune(E_k_thr,0.02, scene.cameras_extent, size_threshold, radii, max_frac_new)
+                        gaussians.densify_and_prune(E_k_thr,0.005, scene.cameras_extent, size_threshold, radii, 0.02)
 
                         # 여기서 맹점이 가우시안 자체가 많으면 5퍼든 2퍼든 개커질수밖에 없음. 노말라이즈를 한번 하든지(이터레이션이나 현재 가우시안 수로)
                         # 아니면 한 번에 커질 수를 절대적으로 정하는것도...
