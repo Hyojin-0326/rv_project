@@ -322,14 +322,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
                     #original thresholds- opacity: 0.005, E_K: 0.1
                     if allow_grow:
-                        
-                        #❗일단 E_K의 상위 20퍼 값을 찾고 그걸 스레스홀드로 걸긴 했는데. 이러면 densification에서 5퍼씩의 제한을 걸 필요가 없을 것 같기도함.
-                        #아니면 split/clone에서 각각 5퍼씩 키우지 말고, 전체에서 10처를 증가시킨 값을 max_num_gaussians로 놓고 걔네들을 split/clone하는 방법도? 
-                        num_gaussians = gaussians.get_xyz.shape[0]
-                        E_K = gaussians.E_k[:num_gaussians].squeeze()
-                        top_frac = 0.2
-                        idx = int(num_gaussians*(1.0 - top_frac))
-                        E_k_thr = torch.kthvalue(E_K, idx).values.item()
+                        E_k, E_k_thr = gaussians.nonlinear_error()
                         print(f"Densification E_k threshold: {E_k_thr}")
                         gaussians.densify_and_prune(E_k_thr,0.005, scene.cameras_extent, size_threshold, radii, 0.02)
 
