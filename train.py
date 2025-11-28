@@ -336,7 +336,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                         # 여기서 맹점이 가우시안 자체가 많으면 5퍼든 2퍼든 개커질수밖에 없음. 노말라이즈를 한번 하든지(이터레이션이나 현재 가우시안 수로)
                         # 아니면 한 번에 커질 수를 절대적으로 정하는것도...
                     else:
-                        gaussians.prune_points((gaussians.get_opacity < 0.005).squeeze())
+                        gaussians.prune_points((gaussians.get_opacity < 0.01).squeeze())
                     gaussians.reset_Ek()
 
                 """          

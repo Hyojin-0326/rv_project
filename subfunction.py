@@ -19,7 +19,7 @@ def get_frac(a):
 """
 def get_max_frac_new(iteration):
     if iteration < 5000:
-        return 0.03  # 3%
+        return 0.035  # 3%
     elif iteration < 15000:
         return 0.02   # 2%
     elif iteration < 27000:
