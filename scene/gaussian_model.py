@@ -65,7 +65,11 @@ class GaussianModel:
         self.percent_dense = 0
         self.spatial_lr_scale = 0
         self._e_k = 0   #added
-        self.E_k = 0    #added
+        self.E_k_sum = 0    #added
+        self.E_k_sq_sum = 0   #added
+        self.E_k_count = 0   #added
+        self.s_k = torch.empty(0)  # added
+        
 
         self.setup_functions()
 
@@ -83,6 +87,7 @@ class GaussianModel:
             self.denom,
             self.optimizer.state_dict(),
             self.spatial_lr_scale,
+            self.s_k
         )
     
     def restore(self, model_args, training_args):
@@ -94,6 +99,7 @@ class GaussianModel:
         self._rotation, 
         self._opacity,
         self.max_radii2D, 
+        self.s_k,
         xyz_gradient_accum, 
         denom,
         opt_dict, 
@@ -140,6 +146,15 @@ class GaussianModel:
     @property
     def get_e_k(self):
         return self._e_k
+
+    @property
+    def get_s_k(self):
+        return torch.sigmoid(self.s_k)
+    
+    @property 
+    def get_eff_opacity(self):
+        return self.get_opacity*self.get_s_k
+        
 
     def get_exposure_from_name(self, image_name):
         if self.pretrained_exposures is None:
@@ -189,6 +204,11 @@ class GaussianModel:
 )
 
         self.E_k = torch.zeros_like(self._opacity, device="cuda")
+        sk_value = 10*torch.ones(self._opacity.shape[0], 1, dtype = torch.float, device="cuda")
+        self.s_k = nn.Parameter(sk_value.requires_grad_(True))
+        self.E_k_sum torch.zeros_like(self._opacity, device="cuda")
+        self.E_k_sq_sum = torch.zeros_like(self._opacity, device="cuda")
+        self.E_k_count = torch.zeros_like(self._opacity, device="cuda")
 
 
     def training_setup(self, training_args):
@@ -202,7 +222,8 @@ class GaussianModel:
             {'params': [self._features_rest], 'lr': training_args.feature_lr / 20.0, "name": "f_rest"},
             {'params': [self._opacity], 'lr': training_args.opacity_lr, "name": "opacity"},
             {'params': [self._scaling], 'lr': training_args.scaling_lr, "name": "scaling"},
-            {'params': [self._rotation], 'lr': training_args.rotation_lr, "name": "rotation"}
+            {'params': [self._rotation], 'lr': training_args.rotation_lr, "name": "rotation"},
+            {'params': [self.s_k], 'lr': training_args.opacity_lr, "name": "s_k"}
         ]
 
         if self.optimizer_type == "default":
@@ -326,9 +347,16 @@ class GaussianModel:
         self._opacity = nn.Parameter(torch.tensor(opacities, dtype=torch.float, device="cuda").requires_grad_(True))
         self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True))
         self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
+        self.active_sh_degree = self.max_sh_degree
+        sk_value = 10*torch.ones(opacities.shape[0], 10, dtype = torch.float, device="cuda")
+
         self._e_k = torch.zeros_like(self._opacity, device="cuda",  requires_grad=True)
         self.E_k = torch.zeros_like(self._opacity, device="cuda")
-        self.active_sh_degree = self.max_sh_degree
+        self.s_k = nn.Parameter(sk_value.requires_grad_(True))
+
+        self.E_k_sum = torch.zeros_like(self._opacity, device="cuda")
+        self.E_k_sq_sum = torch.zeros_like(self._opacity, device="cuda")
+        self.E_k_count = torch.zeros_like(self._opacity, device="cuda")
 
     def replace_tensor_to_optimizer(self, tensor, name):
         optimizable_tensors = {}
@@ -374,6 +402,7 @@ class GaussianModel:
         self._opacity = optimizable_tensors["opacity"]
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
+        self.s_k = optimizable_tensors["s_k"] # added
 
         self.xyz_gradient_accum = self.xyz_gradient_accum[valid_points_mask]
 
@@ -383,12 +412,13 @@ class GaussianModel:
         if getattr(self, "tmp_radii", None) is not None:
             self.tmp_radii = self.tmp_radii[valid_points_mask]
         
-        # e_k / E_k도 같이 잘라주기
+        # custom
         self._e_k = self._e_k[valid_points_mask].detach().clone().requires_grad_(True)
         self.E_k = self.E_k[valid_points_mask]
 
-
-
+        self.E_k_sum = self.E_k_sum[valid_points_mask]
+        self.E_k_sq_sum = self.E_k_sq_sum[valid_points_mask]
+        self.E_k_count = self.E_k_count[valid_points_mask]
 
     def cat_tensors_to_optimizer(self, tensors_dict):
         optimizable_tensors = {}
@@ -412,13 +442,14 @@ class GaussianModel:
 
         return optimizable_tensors
 
-    def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_tmp_radii):
+    def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_tmp_radii, new_s_k):
         d = {"xyz": new_xyz,
         "f_dc": new_features_dc,
         "f_rest": new_features_rest,
         "opacity": new_opacities,
         "scaling" : new_scaling,
-        "rotation" : new_rotation}
+        "rotation" : new_rotation,
+        "s_k": new_s_k}
 
         optimizable_tensors = self.cat_tensors_to_optimizer(d)
         self._xyz = optimizable_tensors["xyz"]
@@ -427,21 +458,22 @@ class GaussianModel:
         self._opacity = optimizable_tensors["opacity"]
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
+        self.s_k = optimizable_tensors["s_k"]
+        self.tmp_radii = torch.cat((self.tmp_radii, new_tmp_radii))
+        self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+        self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
         # add new e_k based on opacity idx
         new_count = new_xyz.shape[0]
         zeros_ek = torch.zeros((new_count, 1), device="cuda")
 
-        # ❗일단 detach 하고 돌려봄
         self._e_k = torch.cat((self._e_k, zeros_ek), dim=0).detach().requires_grad_(True)
-
-        #add E_k
         self.E_k = torch.cat((self.E_k, torch.zeros((new_count, 1), device="cuda")), dim=0)
+        self.E_k_sum = torch.cat((self.E_k_sum, torch.zeros((new_count, 1), device="cuda")), dim=0)
+        self.E_k_sq_sum = torch.cat((self.E_k_sq_sum, torch.zeros((new_count, 1), device="cuda")), dim=0)
+        self.E_k_count = torch.cat((self.E_k_count, torch.zeros((new_count, 1), device="cuda")), dim=0)
 
-        self.tmp_radii = torch.cat((self.tmp_radii, new_tmp_radii))
-        self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
-        self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
-        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
     def densify_and_split(self, E_k, E_k_thr, scene_extent,max_frac_new,  N=2):
 
@@ -462,16 +494,6 @@ class GaussianModel:
         selected_pts_mask = torch.zeros(self.get_xyz.shape[0], dtype=torch.bool, device="cuda")
         selected_pts_mask[cand] = True
 
-
-
-        # n_init_points = self.get_xyz.shape[0] 
-        # Extract points that satisfy the gradient condition
-        # padded_E_k = torch.zeros((n_init_points), device="cuda")
-        # padded_E_k[:E_k.shape[0]] = E_k.squeeze()
-        # selected_pts_mask = torch.where(padded_E_k >= E_k_thr, True, False)
-        # selected_pts_mask = torch.logical_and(selected_pts_mask,
-        #                                       torch.max(self.get_scaling, dim=1).values > self.percent_dense*scene_extent)
-
         stds = self.get_scaling[selected_pts_mask].repeat(N,1)
         means =torch.zeros((stds.size(0), 3),device="cuda")
         samples = torch.normal(mean=means, std=stds)
@@ -484,7 +506,11 @@ class GaussianModel:
         new_opacity = self._opacity[selected_pts_mask].repeat(N,1)
         new_tmp_radii = self.tmp_radii[selected_pts_mask].repeat(N)
 
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation, new_tmp_radii)
+        #❗여기서는 자식 importance를 그냥 1로 초기화함, 부모의 importance를 자식에게 복제하는 로직도 실험 필요. 
+        sk_value = 10*torch.ones(new_xyz.shape[0], 1, dtype = torch.float, device="cuda")
+        new_s_k = nn.Parameter(sk_value.requires_grad_(True))
+
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation, new_tmp_radii, new_s_k)
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
@@ -508,12 +534,6 @@ class GaussianModel:
 
         selected_pts_mask = torch.zeros_like(base_mask, dtype=torch.bool)
         selected_pts_mask[cand] = True
-
-        # # Extract points that satisfy the gradient condition
-        # selected_pts_mask = torch.where(torch.norm(E_k, dim=-1) >= E_k_thr, True, False)
-        # selected_pts_mask = torch.logical_and(selected_pts_mask,
-        #                                       torch.max(self.get_scaling, dim=1).values <= self.percent_dense*scene_extent)
-        
         new_xyz = self._xyz[selected_pts_mask]
         new_features_dc = self._features_dc[selected_pts_mask]
         new_features_rest = self._features_rest[selected_pts_mask]
@@ -522,10 +542,10 @@ class GaussianModel:
         new_opacities = corrected_opacities
         new_scaling = self._scaling[selected_pts_mask]
         new_rotation = self._rotation[selected_pts_mask]
-
         new_tmp_radii = self.tmp_radii[selected_pts_mask]
+        new_s_k = self.s_k[selected_pts_mask]
 
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_tmp_radii)
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_tmp_radii, new_s_k)
 
     def densify_and_prune(self, E_k_thr, min_opacity, extent, max_screen_size, radii, max_frac_new=0.05):
 
@@ -564,8 +584,13 @@ class GaussianModel:
         # 2) _e_k 파라미터 자체를 새로 생성하여 optimizer state도 리셋
         new_e_k = nn.Parameter(torch.zeros_like(self._e_k), requires_grad=True)
         self._e_k = new_e_k
+
+        # 3) 통계량들 리셋
+        self.E_k_sq_sum =0
+        self.E_k_count = 0
+        self.E_k_sum = 0
     
-    ###### multi view E_k utils #####
+    ###### multi view E_k utils ##### ❗E_k var같은 누적 값도 여기서 관리
     def nonlinear_error(self, fn_type='softmax', p=2, a=2, top_frac=0.2):
         import torch
         import torch.nn.functional as F

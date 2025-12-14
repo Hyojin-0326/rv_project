@@ -175,25 +175,36 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             alpha_mask = viewpoint_cam.alpha_mask.cuda()
             image *= alpha_mask
 
+        # -----------------------------------------------------------
         # Loss
+        # -----------------------------------------------------------
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
         if FUSED_SSIM_AVAILABLE:
             ssim_value = fused_ssim(image.unsqueeze(0), gt_image.unsqueeze(0))
         else:
             ssim_value = ssim(image, gt_image)
-
-
-
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_value) 
-        # ----------------------------
-        # L_aux 구성
-        # err_image = sum_k e_k * ω_k(u) 가 픽셀별로 들어있음                 # [1,H,W]
+
+
+        rendered_mask = (gaussians.denom > 0).squeeze(-1)
+
+        # L_aux 
         alpha = 1e-6
         per_pix_err = (image - gt_image).abs().mean(0, keepdim=True).detach()  # [1,H,W], 
         L_aux = (per_pix_err * err_img).sum()              # 스칼라
-        # ----------------------------
 
+        # sparsity regularization
+        s_k = gaussians.get_s_k  # [N,1]
+        L_sp = torch.mean(s_k) 
+
+        #variance regularization
+        count = gaussians.E_k_count[rendered_mask]+1e-6
+        avg_Ek = gaussians.E_k_sum[rendered_mask]/count  # [N,1]
+        var_Ek = torch.clamp((gaussians.E_k_sq_sum[rendered_mask]/count) - (avg_Ek**2), min= 0)
+        L_var = torch.mean(s_k[rendered_mask]*var_Ek)
+
+        #sparcity, variance를 sum으로 바꿔보기
 
 
         # Depth regularization
@@ -210,50 +221,31 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         else:
             Ll1depth = 0
 
-        # #debug
-        # print("e_k requires_grad:", gaussians.get_e_k.requires_grad)
-        # print("err_img requires_grad:", err_img.requires_grad)
-        # print("L_aux requires_grad:", L_aux.requires_grad)
-
-        loss_total = L_aux * alpha + loss
+        lambda1 = 0.001
+        lambda2 = 0.001
+        loss_total = L_aux * alpha + loss+ L_sp * lambda1 + L_var * lambda2
         loss_total.backward()
 
+        # -----------------------------------------------------------
         with torch.no_grad():
-            # d(loss_total)/d e_k = alpha * E_k_view  (main loss는 e_k에 의존X)
             E_k_view = (gaussians._e_k.grad / alpha).detach().clone()  # [N,1]
-
-            # 한 번 사용했으면 grad 비워주기 (optimizer가 안 관리하니까 직접)
-            # gaussians._e_k.grad.zero_()
-
-            # view별 최대값 유지
-            mask = E_k_view > gaussians.E_k
-            gaussians.E_k[mask] = E_k_view[mask]
-     
-
-        """
-                E_k_view = torch.autograd.grad(
-                    L_aux,                      # = (per_pix_err * err_image).sum()
-                    gaussians._e_k,
-                    retain_graph=True,
-                    allow_unused=False
-                )[0]
-
-                if E_k_view is None:
-                    raise RuntimeError("E_k_view가 None입니다. e_k가 requires_grad=True인지, err 렌더가 e_k에 미분 가능하게 연결돼 있는지 확인하세요.")
-                E_k_view = E_k_view.detach().clone()
-
-                mask = E_k_view > gaussians.E_k # [N ,1], N = 가우시안 개수
-                gaussians.E_k[mask] = E_k_view[mask]
-        """
-
+            gaussians.E_k_sum[rendered_mask] += E_k_view[rendered_mask]
+            gaussians.E_k_sq_sum[rendered_mask] += E_k_view[rendered_mask]**2
+            
+            gaussians.E_k_count[rendered_mask] += 1
+        # -----------------------------------------------------------
 
         if iteration % 10 == 0: # ⬅️ 너무 자주 기록하면 오버헤드가 있으므로 조절
             log_data = {
                 "iteration": iteration,
                 "total_loss": loss.item(),
                 "L1_loss": Ll1.item(),
-                "L_aux": L_aux.item() if L_aux > 0 else 0,
-                "total_points": gaussians.get_xyz.shape[0]
+                "total_points": gaussians.get_xyz.shape[0],
+                "s_k/mean": s_k.mean().item(),
+                "s_k/min": s_k.min().item(),
+                "s_k/max": s_k.max().item(),
+                "E_k/max": gaussians.E_k.max().item(),
+                "E_k/mean": gaussians.E_k.mean().item()
             }
             
             # (선택) PSNR도 함께 기록 (테스트 시)
@@ -326,8 +318,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                         print(f"Densification E_k threshold: {E_k_thr}")
                         gaussians.densify_and_prune(E_k_thr,0.005, scene.cameras_extent, size_threshold, radii, 0.02)
 
-                        # 여기서 맹점이 가우시안 자체가 많으면 5퍼든 2퍼든 개커질수밖에 없음. 노말라이즈를 한번 하든지(이터레이션이나 현재 가우시안 수로)
-                        # 아니면 한 번에 커질 수를 절대적으로 정하는것도...
                     else:
                         gaussians.prune_points((gaussians.get_opacity < 0.01).squeeze())
                     gaussians.reset_Ek()
