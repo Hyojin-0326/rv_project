@@ -206,7 +206,7 @@ class GaussianModel:
         self.E_k = torch.zeros_like(self._opacity, device="cuda")
         sk_value = 10*torch.ones(self._opacity.shape[0], 1, dtype = torch.float, device="cuda")
         self.s_k = nn.Parameter(sk_value.requires_grad_(True))
-        self.E_k_sum torch.zeros_like(self._opacity, device="cuda")
+        self.E_k_sum = torch.zeros_like(self._opacity, device="cuda")
         self.E_k_sq_sum = torch.zeros_like(self._opacity, device="cuda")
         self.E_k_count = torch.zeros_like(self._opacity, device="cuda")
 
@@ -482,7 +482,7 @@ class GaussianModel:
         #scale이 큰 걸 split 후보로 놓아야 할까?
         base_mask = self.get_scaling.max(dim=1).values[:current_N] > self.percent_dense*scene_extent # 스케일링 작은거(공분산 작은거) 제외
 
-        is_high_var = (var_Ek[:current_N] >= var_th)
+        is_high_var = (var_Ek[:current_N] >= var_th).squeeze()
 
         #cand: scale큼 ^ var큼 ^ Ek 큼
         cand = torch.nonzero((scores >= E_k_thr) & base_mask.squeeze(-1) & is_high_var.squeeze(-1), as_tuple=False).squeeze(-1)
@@ -523,7 +523,7 @@ class GaussianModel:
 
         current_N = E_k.shape[0]
         scores = torch.norm(E_k, dim=-1)
-        is_low_var = (var_Ek[:current_N] < var_th)
+        is_low_var = (var_Ek[:current_N] < var_th).squeeze()
         base_mask = self.get_scaling.max(dim=1).values[:current_N] <= (self.percent_dense * scene_extent) # 스케일링 큰거(공분산 큰거) 제외
 
         cand = torch.nonzero((scores >= E_k_thr) & base_mask.squeeze(-1)&is_low_var, as_tuple=False).squeeze(-1)
@@ -579,7 +579,7 @@ class GaussianModel:
         opacity_mask = (self.get_opacity < min_opacity).squeeze()
 
         if rule == 'both':
-            prune_mask = torch.logical_and(opacity_mask, sparsity_mask)
+            prune_mask = torch.logical_or(opacity_mask, sparsity_mask)
 
             
         elif rule == 'opacity':
@@ -616,9 +616,9 @@ class GaussianModel:
         self._e_k = new_e_k
 
         # 3) 통계량들 리셋
-        self.E_k_sq_sum =0
-        self.E_k_count = 0
-        self.E_k_sum = 0
+        self.E_k_sq_sum.zero_()
+        self.E_k_count.zero_()
+        self.E_k_sum.zero_()
     
     ###### multi view E_k utils ##### ❗E_k var같은 누적 값도 여기서 관리
     def nonlinear_error(self, fn_type='softmax', p=2, a=2, top_frac=0.2):

@@ -186,9 +186,19 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             ssim_value = ssim(image, gt_image)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_value) 
 
-
         rendered_mask = (gaussians.denom > 0).squeeze(-1)
 
+        #sparsity warmup
+        target_lambda1 = 1e-4
+        warmup_start_iter = 10000
+        warmup_duration = 2000
+        if iteration< warmup_start_iter:
+            current_lambda1 = 0.0
+        elif iteration < (warmup_start_iter + warmup_duration):
+            prog = (iteration - warmup_start_iter) / warmup_duration
+            current_lambda1 = target_lambda1*prog
+        else:
+            current_lambda1 = target_lambda1
         # L_aux 
         alpha = 1e-6
         per_pix_err = (image - gt_image).abs().mean(0, keepdim=True).detach()  # [1,H,W], 
@@ -203,6 +213,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         avg_Ek = gaussians.E_k_sum[rendered_mask]/count  # [N,1]
         var_Ek = torch.clamp((gaussians.E_k_sq_sum[rendered_mask]/count) - (avg_Ek**2), min= 0)
         L_var = torch.mean(s_k[rendered_mask]*var_Ek)
+
+        full_var_Ek = torch.zeros((gaussians.get_xyz.shape[0],1), device="cuda")
+        full_var_Ek[rendered_mask] = var_Ek
+        
 
         #sparcity, variance를 sum으로 바꿔보기
 
@@ -221,9 +235,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         else:
             Ll1depth = 0
 
-        lambda1 = 0.001
-        lambda2 = 0.001
-        loss_total = L_aux * alpha + loss+ L_sp * lambda1 + L_var * lambda2
+        lambda2 = 1e-6
+        loss_total = L_aux * alpha + loss+ L_sp * current_lambda1 + L_var * current_lambda1
         loss_total.backward()
 
         # -----------------------------------------------------------
@@ -319,7 +332,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     if allow_grow:
                         E_k_thr = gaussians.nonlinear_error()
                         print(f"Densification E_k threshold: {E_k_thr}")
-                        gaussians.densify_and_prune(E_k_thr,0.01,0.01, scene.cameras_extent, size_threshold, radii, var_Ek, 0.02, rule = 'both',)
+                        gaussians.densify_and_prune(E_k_thr,0.01,0.1, scene.cameras_extent, size_threshold, radii, full_var_Ek, 0.02, rule = 'both')
 
                     #allow_grow를 항상 true 로 놨으니까 걍 냅둠일단
                     # else:
