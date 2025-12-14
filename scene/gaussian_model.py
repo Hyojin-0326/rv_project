@@ -552,7 +552,7 @@ class GaussianModel:
 
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_tmp_radii, new_s_k)
 
-    def densify_and_prune(self, E_k_thr, min_opacity, min_sparsity, extent, max_screen_size, radii, var_Ek, rule = 'both', max_frac_new=0.05):
+    def densify_and_prune(self, E_k_thr, min_opacity, min_sparsity, extent, max_screen_size, radii, var_Ek, max_frac_new=0.05, rule = 'both'):
 
         num_pts_before = self.get_xyz.shape[0]
         E_k = self.E_k[:num_pts_before]

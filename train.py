@@ -319,7 +319,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     if allow_grow:
                         E_k_thr = gaussians.nonlinear_error()
                         print(f"Densification E_k threshold: {E_k_thr}")
-                        gaussians.densify_and_prune(E_k_thr,0.01,0.01, scene.cameras_extent, size_threshold, radii, var_Ek, rule = 'both', 0.02)
+                        gaussians.densify_and_prune(E_k_thr,0.01,0.01, scene.cameras_extent, size_threshold, radii, var_Ek, 0.02, rule = 'both',)
 
                     #allow_grow를 항상 true 로 놨으니까 걍 냅둠일단
                     # else:
