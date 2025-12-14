@@ -20,6 +20,9 @@ from scene import Scene, GaussianModel
 from utils.general_utils import safe_state, get_expon_lr_func
 import uuid
 import logging
+import matplotlib.pyplot as plt
+import numpy as np
+from plyfile import PlyData, PlyElement
 from tqdm.auto import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
@@ -85,6 +88,41 @@ def print_grad_tensors(model):
     for name, t in model.__dict__.items():
         if torch.is_tensor(t) and t.grad_fn is not None:
             logger.warning(f"grad_fn alive: {name} shape={t.shape} fn={t.grad_fn}")
+
+def save_heatmap_ply(gaussians, path, scalar_tensor, normalize=True, tag="sk"):
+    mkdir_p(os.path.dirname(path))
+    xyz = gaussians.get_xyz.detach().cpu().numpy()
+    normals = np.zeros_like(xyz)
+    values = scalar_tensor.detach().cpu().numpy().flatten()
+
+    if normalize:
+        v_min = np.percentile(values, 1)
+        v_max = np.percentile(values, 99)
+        np.clip(values, v_min, v_max, out=values)
+        values = (values - v_min) / (v_max - v_min+1e-8)
+
+    #value to color
+    cmap = plt.get_cmap('turbo') 
+    rgb_colors = cmap(values)[:, :3] 
+
+    # convert to SH coefficients
+    SH_C0 = 0.28209479177
+    f_dc = (rgb_colors - 0.5) / SH_C0
+
+    # Create structured array for PLY
+    opacities = gaussians._opacity.detach().cpu().numpy()
+    scale = gaussians._scaling.detach().cpu().numpy()
+    rotation = gaussians._rotation.detach().cpu().numpy()
+
+    dtype_full = [(attribute, 'f4') for attribute in gaussians.construct_list_of_attributes()]
+    elements = np.empty(xyz.shape[0], dtype=dtype_full)
+    attributes = np.concatenate((xyz, normals, f_dc, np.zeros((xyz.shape[0], 45)), opacities, scale, rotation), axis=1) # 45는 3차 SH의 나머지 부분 (15 * 3채널)
+
+    ply_filename = os.path.join(path, f"point_cloud_{tag}.ply")
+        el = PlyElement.describe(elements, 'vertex')
+        PlyData([el]).write(ply_filename)
+        print(f"Debug PLY saved: {ply_filename}")
+        
 
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
@@ -294,6 +332,19 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
+
+                # Case 1: s_k (exposure/scale factor) 시각화
+                save_heatmap_ply(gaussians, scene.model_path + "/point_cloud/iteration_{}".format(iteration), 
+                                    s_k, tag="heatmap_sk")
+                                    
+                    # Case 2: E_k (Accumulated Gradient/Error) 시각화
+                    # E_k가 어디에 집중되어 있는지(아티팩트 원인) 볼 때 유용
+                save_heatmap_ply(gaussians, scene.model_path + "/point_cloud/iteration_{}".format(iteration), 
+                                    gaussians.E_k, tag="heatmap_Ek")
+
+
+
+
 
             # Densification
             if iteration < opt.densify_until_iter:
