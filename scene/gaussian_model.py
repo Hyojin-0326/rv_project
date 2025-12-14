@@ -469,10 +469,14 @@ class GaussianModel:
         zeros_ek = torch.zeros((new_count, 1), device="cuda")
 
         self._e_k = torch.cat((self._e_k, zeros_ek), dim=0).detach().requires_grad_(True)
-        self.E_k = torch.cat((self.E_k, torch.zeros((new_count, 1), device="cuda")), dim=0)
-        self.E_k_sum = torch.cat((self.E_k_sum, torch.zeros((new_count, 1), device="cuda")), dim=0)
-        self.E_k_sq_sum = torch.cat((self.E_k_sq_sum, torch.zeros((new_count, 1), device="cuda")), dim=0)
-        self.E_k_count = torch.cat((self.E_k_count, torch.zeros((new_count, 1), device="cuda")), dim=0)
+        
+        with torch.no_grad():
+            self.E_k = torch.cat((self.E_k, torch.zeros((new_count, 1), device="cuda")), dim=0)
+            self.E_k_sum = torch.cat((self.E_k_sum, torch.zeros((new_count, 1), device="cuda")), dim=0)
+            self.E_k_sq_sum = torch.cat((self.E_k_sq_sum, torch.zeros((new_count, 1), device="cuda")), dim=0)
+            self.E_k_count = torch.cat((self.E_k_count, torch.zeros((new_count, 1), device="cuda")), dim=0)
+
+
 
 
     def densify_and_split(self, E_k, E_k_thr, var_Ek,var_th, scene_extent,max_frac_new,  N=2):

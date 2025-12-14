@@ -211,7 +211,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         #variance regularization
         count = gaussians.E_k_count[rendered_mask]+1e-6
         avg_Ek = gaussians.E_k_sum[rendered_mask]/count  # [N,1]
-        var_Ek = torch.clamp((gaussians.E_k_sq_sum[rendered_mask]/count) - (avg_Ek**2), min= 0)
+        var_Ek = torch.clamp((gaussians.E_k_sq_sum[rendered_mask]/count) - (avg_Ek**2), min= 0).detach()
         L_var = torch.mean(s_k[rendered_mask]*var_Ek)
 
         full_var_Ek = torch.zeros((gaussians.get_xyz.shape[0],1), device="cuda")
@@ -240,15 +240,16 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         loss_total.backward()
 
         # -----------------------------------------------------------
-        with torch.no_grad():
-            E_k_view = (gaussians._e_k.grad / alpha).detach().clone()  # [N,1]
-            gaussians.E_k_sum[rendered_mask] += E_k_view[rendered_mask]
-            gaussians.E_k_sq_sum[rendered_mask] += E_k_view[rendered_mask]**2
-            gaussians.E_k_count[rendered_mask] += 1
+        if iteration < opt.densify_until_iter:
+            with torch.no_grad():
+                E_k_view = (gaussians._e_k.grad / alpha).detach().clone()  # [N,1]
+                gaussians.E_k_sum[rendered_mask] += E_k_view[rendered_mask]
+                gaussians.E_k_sq_sum[rendered_mask] += E_k_view[rendered_mask]**2
+                gaussians.E_k_count[rendered_mask] += 1
 
-            #원래 로직
-            mask = E_k_view > gaussians.E_k
-            gaussians.E_k[mask] = E_k_view[mask]
+                #원래 로직
+                mask = E_k_view > gaussians.E_k
+                gaussians.E_k[mask] = E_k_view[mask]
         # -----------------------------------------------------------
 
         if iteration % 10 == 0: # ⬅️ 너무 자주 기록하면 오버헤드가 있으므로 조절
@@ -261,7 +262,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 "s_k/min": s_k.min().item(),
                 "s_k/max": s_k.max().item(),
                 "E_k/max": gaussians.E_k.max().item(),
-                "E_k/mean": gaussians.E_k.mean().item()
+                "E_k/mean": gaussians.E_k.mean().item(),
+                "E_k_min": gaussians.E_k.min().item(),
+                "Var_Ek/mean": var_Ek.mean().item() # 이건걍 넣은거
             }
             
             # (선택) PSNR도 함께 기록 (테스트 시)
@@ -343,6 +346,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     gaussians.reset_opacity()
 
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
             # Optimizer step
             if iteration < opt.iterations:
                 gaussians.exposure_optimizer.step()
@@ -351,9 +355,13 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     visible = radii > 0
                     gaussians.optimizer.step(visible, radii.shape[0])
                     gaussians.optimizer.zero_grad(set_to_none = True)
+                    if gaussians._e_k.grad is not None:
+                        gaussians._e_k.grad.zero_()
                 else:
                     gaussians.optimizer.step()
                     gaussians.optimizer.zero_grad(set_to_none = True)
+                    if gaussians._e_k.grad is not None:
+                        gaussians._e_k.grad.zero_()
 
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
