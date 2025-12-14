@@ -119,10 +119,10 @@ def save_heatmap_ply(gaussians, path, scalar_tensor, normalize=True, tag="sk"):
     attributes = np.concatenate((xyz, normals, f_dc, np.zeros((xyz.shape[0], 45)), opacities, scale, rotation), axis=1) # 45는 3차 SH의 나머지 부분 (15 * 3채널)
 
     ply_filename = os.path.join(path, f"point_cloud_{tag}.ply")
-        el = PlyElement.describe(elements, 'vertex')
-        PlyData([el]).write(ply_filename)
-        print(f"Debug PLY saved: {ply_filename}")
-        
+    el = PlyElement.describe(elements, 'vertex')
+    PlyData([el]).write(ply_filename)
+    print(f"Debug PLY saved: {ply_filename}")
+    
 
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
