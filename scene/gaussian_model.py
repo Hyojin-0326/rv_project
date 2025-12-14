@@ -475,13 +475,17 @@ class GaussianModel:
         self.E_k_count = torch.cat((self.E_k_count, torch.zeros((new_count, 1), device="cuda")), dim=0)
 
 
-    def densify_and_split(self, E_k, E_k_thr, scene_extent,max_frac_new,  N=2):
-
+    def densify_and_split(self, E_k, E_k_thr, var_Ek,var_th, scene_extent,max_frac_new,  N=2):
         current_N = E_k.shape[0]
         scores = torch.norm(E_k, dim=-1)
-        base_mask = self.get_scaling.max(dim=1).values[:current_N] > self.percent_dense*scene_extent # 스케일링 작은거(공분산 작은거) 제외
-        cand = torch.nonzero((scores >= E_k_thr) & base_mask.squeeze(-1), as_tuple=False).squeeze(-1)
 
+        #scale이 큰 걸 split 후보로 놓아야 할까?
+        base_mask = self.get_scaling.max(dim=1).values[:current_N] > self.percent_dense*scene_extent # 스케일링 작은거(공분산 작은거) 제외
+
+        is_high_var = (var_Ek[:current_N] >= var_th)
+
+        #cand: scale큼 ^ var큼 ^ Ek 큼
+        cand = torch.nonzero((scores >= E_k_thr) & base_mask.squeeze(-1) & is_high_var.squeeze(-1), as_tuple=False).squeeze(-1)
         max_new = int(self.get_xyz.shape[0] * max_frac_new)
         if max_new <= 0 or cand.numel() == 0:
             return 
@@ -515,13 +519,14 @@ class GaussianModel:
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
 
-    def densify_and_clone(self, E_k, E_k_thr, scene_extent, max_frac_new):
-
+    def densify_and_clone(self, E_k, E_k_thr, var_Ek, var_th, scene_extent, max_frac_new):
 
         current_N = E_k.shape[0]
         scores = torch.norm(E_k, dim=-1)
+        is_low_var = (var_Ek[:current_N] < var_th)
         base_mask = self.get_scaling.max(dim=1).values[:current_N] <= (self.percent_dense * scene_extent) # 스케일링 큰거(공분산 큰거) 제외
-        cand = torch.nonzero((scores >= E_k_thr) & base_mask.squeeze(-1), as_tuple=False).squeeze(-1)
+
+        cand = torch.nonzero((scores >= E_k_thr) & base_mask.squeeze(-1)&is_low_var, as_tuple=False).squeeze(-1)
         max_new = int(self.get_xyz.shape[0] * max_frac_new)
 
         if max_new <= 0 or cand.numel() == 0:
@@ -543,29 +548,54 @@ class GaussianModel:
         new_scaling = self._scaling[selected_pts_mask]
         new_rotation = self._rotation[selected_pts_mask]
         new_tmp_radii = self.tmp_radii[selected_pts_mask]
-        new_s_k = self.s_k[selected_pts_mask]
+        new_s_k = self.s_k[selected_pts_mask].detach()
 
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_tmp_radii, new_s_k)
 
-    def densify_and_prune(self, E_k_thr, min_opacity, extent, max_screen_size, radii, max_frac_new=0.05):
+    def densify_and_prune(self, E_k_thr, min_opacity, min_sparsity, extent, max_screen_size, radii, var_Ek, rule = 'both', max_frac_new=0.05):
 
         num_pts_before = self.get_xyz.shape[0]
         E_k = self.E_k[:num_pts_before]
 
-        self.tmp_radii = radii
-       
-        self.densify_and_clone(E_k, E_k_thr, extent, max_frac_new)
-        self.densify_and_split(E_k, E_k_thr, extent, max_frac_new)
 
-        prune_mask = (self.get_opacity < min_opacity).squeeze()
+        #var_th
+        if var_Ek.numel() > 0:
+            valid_vars = var_Ek[var_Ek > 0]
+            if valid_vars.numel() > 0:
+                var_thr = torch.quantile(valid_vars, 0.5)
+            else: var_thr = 0.0
+        else:
+            var_thr = 0.0
+
+        self.tmp_radii = radii
+        self.densify_and_clone(E_k, E_k_thr,var_Ek,var_thr, extent, max_frac_new)
+        self.densify_and_split(E_k, E_k_thr,var_Ek, var_thr, extent, max_frac_new)
+
+
+        #min_sparsity는 일단 형식 유지함, 나중에 arg에 추가해야 할 듯
+        sparsity_mask = (self.get_s_k < min_sparsity).squeeze()
+
+        #opacity_mask
+        opacity_mask = (self.get_opacity < min_opacity).squeeze()
+
+        if rule == 'both':
+            prune_mask = torch.logical_and(opacity_mask, sparsity_mask)
+
+            
+        elif rule == 'opacity':
+            prune_mask = opacity_mask
+
+        elif rule == 'sparsity':
+            prune_mask = sparsity_mask
+        
+        #size_mask
         if max_screen_size:
             big_points_vs = self.max_radii2D > max_screen_size
             big_points_ws = self.get_scaling.max(dim=1).values > 0.1 * extent
             prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
+
         self.prune_points(prune_mask)
         self.tmp_radii = None
-        
-
         torch.cuda.empty_cache()
 
     def add_densification_stats(self, viewspace_point_tensor, update_filter):

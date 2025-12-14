@@ -231,8 +231,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             E_k_view = (gaussians._e_k.grad / alpha).detach().clone()  # [N,1]
             gaussians.E_k_sum[rendered_mask] += E_k_view[rendered_mask]
             gaussians.E_k_sq_sum[rendered_mask] += E_k_view[rendered_mask]**2
-            
             gaussians.E_k_count[rendered_mask] += 1
+
+            #원래 로직
+            mask = E_k_view > gaussians.E_k
+            gaussians.E_k[mask] = E_k_view[mask]
         # -----------------------------------------------------------
 
         if iteration % 10 == 0: # ⬅️ 너무 자주 기록하면 오버헤드가 있으므로 조절
@@ -316,10 +319,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     if allow_grow:
                         E_k_thr = gaussians.nonlinear_error()
                         print(f"Densification E_k threshold: {E_k_thr}")
-                        gaussians.densify_and_prune(E_k_thr,0.005, scene.cameras_extent, size_threshold, radii, 0.02)
+                        gaussians.densify_and_prune(E_k_thr,0.01,0.01, scene.cameras_extent, size_threshold, radii, var_Ek, rule = 'both', 0.02)
 
-                    else:
-                        gaussians.prune_points((gaussians.get_opacity < 0.01).squeeze())
+                    #allow_grow를 항상 true 로 놨으니까 걍 냅둠일단
+                    # else:
+                    #     gaussians.prune_points((gaussians.get_opacity < 0.01).squeeze())
                     gaussians.reset_Ek()
 
                             
