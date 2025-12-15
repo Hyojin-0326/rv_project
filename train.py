@@ -21,6 +21,7 @@ from utils.general_utils import safe_state, get_expon_lr_func
 import uuid
 import logging
 import matplotlib.pyplot as plt
+from utils.system_utils import mkdir_p
 import numpy as np
 from plyfile import PlyData, PlyElement
 from tqdm.auto import tqdm
@@ -89,40 +90,31 @@ def print_grad_tensors(model):
         if torch.is_tensor(t) and t.grad_fn is not None:
             logger.warning(f"grad_fn alive: {name} shape={t.shape} fn={t.grad_fn}")
 
-def save_heatmap_ply(gaussians, path, scalar_tensor, normalize=True, tag="sk"):
-    mkdir_p(os.path.dirname(path))
-    xyz = gaussians.get_xyz.detach().cpu().numpy()
-    normals = np.zeros_like(xyz)
-    values = scalar_tensor.detach().cpu().numpy().flatten()
-
-    if normalize:
-        v_min = np.percentile(values, 1)
-        v_max = np.percentile(values, 99)
-        np.clip(values, v_min, v_max, out=values)
-        values = (values - v_min) / (v_max - v_min+1e-8)
-
-    #value to color
-    cmap = plt.get_cmap('turbo') 
-    rgb_colors = cmap(values)[:, :3] 
-
-    # convert to SH coefficients
-    SH_C0 = 0.28209479177
-    f_dc = (rgb_colors - 0.5) / SH_C0
-
-    # Create structured array for PLY
-    opacities = gaussians._opacity.detach().cpu().numpy()
-    scale = gaussians._scaling.detach().cpu().numpy()
-    rotation = gaussians._rotation.detach().cpu().numpy()
-
-    dtype_full = [(attribute, 'f4') for attribute in gaussians.construct_list_of_attributes()]
-    elements = np.empty(xyz.shape[0], dtype=dtype_full)
-    attributes = np.concatenate((xyz, normals, f_dc, np.zeros((xyz.shape[0], 45)), opacities, scale, rotation), axis=1) # 45는 3차 SH의 나머지 부분 (15 * 3채널)
-
-    ply_filename = os.path.join(path, f"point_cloud_{tag}.ply")
-    el = PlyElement.describe(elements, 'vertex')
-    PlyData([el]).write(ply_filename)
-    print(f"Debug PLY saved: {ply_filename}")
+def save_scalar_as_npy(gaussians, path, scalar_tensor, tag="sk"):
+    """
+    주어진 스칼라 텐서(s_k 또는 E_k)를 NumPy 파일(.npy)로 저장합니다.
     
+    Args:
+        gaussians: GaussianModel 객체 (사용되지 않음)
+        path: 저장할 디렉토리 경로 (예: 'output/.../iteration_30000')
+        scalar_tensor: 저장할 Tensor 데이터 (s_k, E_k 등)
+        tag: 파일명 접미사 (예: 's_k' 또는 'E_k')
+    """
+    
+    # 1. 디렉토리 생성 (os.makedirs는 표준 Python 함수로 mkdir_p를 대체합니다.)
+    os.makedirs(path, exist_ok=True) 
+
+    # 2. Tensor 데이터를 NumPy 배열로 변환
+    # .detach().cpu().numpy()를 사용하여 원본 그래프에서 분리하고 CPU로 이동
+    values = scalar_tensor.detach().cpu().numpy()
+
+    # 3. 파일 경로 구성 및 저장
+    npy_filename = os.path.join(path, f"{tag}.npy")
+    
+    # NumPy 저장
+    np.save(npy_filename, values)
+    
+    print(f"✅ Debug data saved: {npy_filename}")
 
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
@@ -333,16 +325,18 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
 
-                # Case 1: s_k (exposure/scale factor) 시각화
-                save_heatmap_ply(gaussians, scene.model_path + "/point_cloud/iteration_{}".format(iteration), 
-                                    s_k, tag="heatmap_sk")
-                                    
-                    # Case 2: E_k (Accumulated Gradient/Error) 시각화
-                    # E_k가 어디에 집중되어 있는지(아티팩트 원인) 볼 때 유용
-                save_heatmap_ply(gaussians, scene.model_path + "/point_cloud/iteration_{}".format(iteration), 
-                                    gaussians.E_k, tag="heatmap_Ek")
+                save_dir = scene.model_path + "/point_cloud/iteration_{}".format(iteration)
+                    # Case 1: s_k (exposure/scale factor) 시각화
+                if isinstance(s_k, torch.Tensor):
+                        # s_k는 이미 로스 계산 후 Tensor 상태일 것입니다.
+                        save_scalar_as_npy(gaussians, save_dir, s_k, tag="s_k")
 
+                        # Case 2: E_k (Accumulated Gradient/Error) 시각화
+                        # E_k가 어디에 집중되어 있는지(아티팩트 원인) 볼 때 유용
+                if hasattr(gaussians, 'E_k') and isinstance(gaussians.E_k, torch.Tensor):
+                        save_scalar_as_npy(gaussians, save_dir, gaussians.E_k, tag="E_k")
 
+                
 
 
 

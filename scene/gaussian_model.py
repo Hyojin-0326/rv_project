@@ -261,6 +261,9 @@ class GaussianModel:
 
     def construct_list_of_attributes(self):
         l = ['x', 'y', 'z', 'nx', 'ny', 'nz']
+
+        # l.append('s_k')
+        # l.append('E_k')
         # All channels except the 3 DC
         for i in range(self._features_dc.shape[1]*self._features_dc.shape[2]):
             l.append('f_dc_{}'.format(i))
@@ -284,7 +287,21 @@ class GaussianModel:
         scale = self._scaling.detach().cpu().numpy()
         rotation = self._rotation.detach().cpu().numpy()
 
+        # if self.s_k is None:
+        #     print("❗s_k is None")
+        # else:
+        #     s_k = self.s_k.detach().cpu().numpy()
+
+        # if self.E_k is None:
+        #     print("❗E_k is None")
+        # else:
+        #     E_k = self.E_k.mean().detach().cpu().numpy()
+
         dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
+
+
+        # dtype_full.append(('s_k', 'f4'))
+        # dtype_full.append(('E_k', 'f4'))
 
         elements = np.empty(xyz.shape[0], dtype=dtype_full)
         attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation), axis=1)
