@@ -322,21 +322,40 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             # Log and save
             training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), dataset.train_test_exp)
             if (iteration in saving_iterations):
+                if iteration == opt.iterations:
+                    print("\n[ITER {}] Final Pruning: Removing artifacts (s_k < 0.01)...".format(iteration))
+                    
+                    # s_k 값 가져오기
+                    current_s_k = gaussians.get_s_k.detach().squeeze()
+                    
+                    # 제거 마스크 생성
+                    prune_mask = current_s_k < 0.01
+                    n_pruned = prune_mask.sum().item()
+
+                    if n_pruned > 0:
+                        gaussians.prune_points(prune_mask)
+                        print(f"✂️ Pruned {n_pruned} points. Remaining: {gaussians.get_xyz.shape[0]}")
+                        
+                        # (중요) 프루닝 후에는 Optimizer 상태도 정리해줘야 안전함 (메모리 정리)
+                        # 하지만 학습이 여기서 끝나므로 굳이 Optimizer reset은 안 해도 저장엔 문제없음
+                    else:
+                        print("✨ No points to prune (all s_k >= 0.01).")
+                        
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
 
                 save_dir = scene.model_path + "/point_cloud/iteration_{}".format(iteration)
-                    # Case 1: s_k (exposure/scale factor) 시각화
-                if isinstance(s_k, torch.Tensor):
-                        # s_k는 이미 로스 계산 후 Tensor 상태일 것입니다.
-                        save_scalar_as_npy(gaussians, save_dir, s_k, tag="s_k")
-
-                        # Case 2: E_k (Accumulated Gradient/Error) 시각화
-                        # E_k가 어디에 집중되어 있는지(아티팩트 원인) 볼 때 유용
-                if hasattr(gaussians, 'E_k') and isinstance(gaussians.E_k, torch.Tensor):
-                        save_scalar_as_npy(gaussians, save_dir, gaussians.E_k, tag="E_k")
-
                 
+                # 프루닝 되었을 수 있으므로 s_k 다시 조회
+                new_s_k = gaussians.get_s_k 
+
+                # Case 1: s_k 저장
+                if isinstance(new_s_k, torch.Tensor):
+                    save_scalar_as_npy(gaussians, save_dir, new_s_k, tag="s_k")
+
+                # Case 2: E_k 저장
+                if hasattr(gaussians, 'E_k') and isinstance(gaussians.E_k, torch.Tensor):
+                    save_scalar_as_npy(gaussians, save_dir, gaussians.E_k, tag="E_k")
 
 
 
