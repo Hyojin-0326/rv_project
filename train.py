@@ -209,7 +209,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             Ll1depth = 0
 
         lambda2 = 1e-6
-        loss_total = L_aux * alpha + loss+ L_sp * current_lambda1 + L_var * current_lambda1
+        loss_total = L_aux * alpha + loss+ L_sp * current_lambda1 #+ L_var * current_lambda1
         loss_total.backward()
 
         # -----------------------------------------------------------
@@ -233,19 +233,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 "L1_loss": Ll1.item(),
                 "total_points": gaussians.get_xyz.shape[0],
                 "s_k/mean": s_k.mean().item(),
-                "s_k/min": s_k.min().item(),
-                "s_k/max": s_k.max().item(),
                 "E_k/max": gaussians.E_k.max().item(),
-                "E_k/mean": gaussians.E_k.mean().item(),
-                "E_k_min": gaussians.E_k.min().item(),
-                "Var_Ek/mean": var_Ek.mean().item() # 이건걍 넣은거
+                "E_k/mean": gaussians.E_k.mean().item()
+                # "Var_Ek/mean": var_Ek.mean().item() # 이건걍 넣은거
             }
-            
-            # (선택) PSNR도 함께 기록 (테스트 시)
-            if iteration in testing_iterations:
-                # ... (PSNR 계산 로직) ...
-                # log_data["test_psnr"] = psnr_value 
-                pass
 
             wandb.log(log_data)
 
@@ -266,25 +257,25 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             # Log and save
             training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), dataset.train_test_exp)
             if (iteration in saving_iterations):
-                if iteration == opt.iterations:
-                    print("\n[ITER {}] Final Pruning: Removing artifacts (s_k < 0.01)...".format(iteration))
+                # if iteration == opt.iterations:
+                #     print("\n[ITER {}] Final Pruning: Removing artifacts (s_k < 0.01)...".format(iteration))
                     
-                    # s_k 값 가져오기
-                    current_s_k = gaussians.get_s_k.detach().squeeze()
+                #     # s_k 값 가져오기
+                #     current_s_k = gaussians.get_s_k.detach().squeeze()
                     
-                    # 제거 마스크 생성
-                    prune_mask = current_s_k < 0.01
-                    n_pruned = prune_mask.sum().item()
+                #     # 제거 마스크 생성
+                #     prune_mask = current_s_k < 0.01
+                #     n_pruned = prune_mask.sum().item()
 
-                    if n_pruned > 0:
-                        gaussians.prune_points(prune_mask)
-                        print(f"✂️ Pruned {n_pruned} points. Remaining: {gaussians.get_xyz.shape[0]}")
+                #     if n_pruned > 0:
+                #         gaussians.prune_points(prune_mask)
+                #         print(f"✂️ Pruned {n_pruned} points. Remaining: {gaussians.get_xyz.shape[0]}")
                         
-                        # (중요) 프루닝 후에는 Optimizer 상태도 정리해줘야 안전함 (메모리 정리)
-                        # 하지만 학습이 여기서 끝나므로 굳이 Optimizer reset은 안 해도 저장엔 문제없음
-                    else:
-                        print("✨ No points to prune (all s_k >= 0.01).")
-
+                #         # (중요) 프루닝 후에는 Optimizer 상태도 정리해줘야 안전함 (메모리 정리)
+                #         # 하지만 학습이 여기서 끝나므로 굳이 Optimizer reset은 안 해도 저장엔 문제없음
+                #     else:
+                #         print("✨ No points to prune (all s_k >= 0.01).")
+                        
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
 
@@ -354,7 +345,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     if allow_grow:
                         E_k_thr = gaussians.nonlinear_error()
                         print(f"Densification E_k threshold: {E_k_thr}")
-                        gaussians.densify_and_prune(E_k_thr,0.005,0.1, scene.cameras_extent, size_threshold, radii, full_var_Ek, 0.02, rule = 'both')
+                        gaussians.densify_and_prune(E_k_thr,0.01,0.01, scene.cameras_extent, size_threshold, radii, full_var_Ek, 0.02, rule = 'both')
 
                     #allow_grow를 항상 true 로 놨으니까 걍 냅둠일단
                     # else:

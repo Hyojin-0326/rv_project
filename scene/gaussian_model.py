@@ -365,7 +365,7 @@ class GaussianModel:
         self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True))
         self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
         self.active_sh_degree = self.max_sh_degree
-        sk_value = 10*torch.ones(opacities.shape[0], 10, dtype = torch.float, device="cuda")
+        sk_value = 10*torch.ones(opacities.shape[0], 1, dtype = torch.float, device="cuda")
 
         self._e_k = torch.zeros_like(self._opacity, device="cuda",  requires_grad=True)
         self.E_k = torch.zeros_like(self._opacity, device="cuda")
@@ -502,11 +502,11 @@ class GaussianModel:
 
         #scale이 큰 걸 split 후보로 놓아야 할까?
         base_mask = self.get_scaling.max(dim=1).values[:current_N] > self.percent_dense*scene_extent # 스케일링 작은거(공분산 작은거) 제외
-
-        is_high_var = (var_Ek[:current_N] >= var_th).squeeze()
+        # is_high_var = (var_Ek[:current_N] >= var_th).squeeze()
 
         #cand: scale큼 ^ var큼 ^ Ek 큼
-        cand = torch.nonzero((scores >= E_k_thr) & base_mask.squeeze(-1) & is_high_var.squeeze(-1), as_tuple=False).squeeze(-1)
+        cand = torch.nonzero((scores >= E_k_thr) & base_mask.squeeze(-1) & True, as_tuple=False).squeeze(-1)
+        # cand = torch.nonzero((scores >= E_k_thr) & base_mask.squeeze(-1) & is_high_var.squeeze(-1), as_tuple=False).squeeze(-1)
         max_new = int(self.get_xyz.shape[0] * max_frac_new)
         if max_new <= 0 or cand.numel() == 0:
             return 
@@ -544,10 +544,12 @@ class GaussianModel:
 
         current_N = E_k.shape[0]
         scores = torch.norm(E_k, dim=-1)
-        is_low_var = (var_Ek[:current_N] < var_th).squeeze()
+    
+        # is_low_var = (var_Ek[:current_N] < var_th).squeeze()
         base_mask = self.get_scaling.max(dim=1).values[:current_N] <= (self.percent_dense * scene_extent) # 스케일링 큰거(공분산 큰거) 제외
 
-        cand = torch.nonzero((scores >= E_k_thr) & base_mask.squeeze(-1)&is_low_var, as_tuple=False).squeeze(-1)
+        #cand = torch.nonzero((scores >= E_k_thr) & base_mask.squeeze(-1)&is_low_var, as_tuple=False).squeeze(-1)
+        cand = torch.nonzero((scores >= E_k_thr) & base_mask.squeeze(-1)&True, as_tuple=False).squeeze(-1)
         max_new = int(self.get_xyz.shape[0] * max_frac_new)
 
         if max_new <= 0 or cand.numel() == 0:
@@ -642,39 +644,26 @@ class GaussianModel:
         self.E_k_sum.zero_()
     
     ###### multi view E_k utils ##### ❗E_k var같은 누적 값도 여기서 관리
-    def nonlinear_error(self, fn_type='softmax', p=2, a=2, top_frac=0.2):
-        import torch
-        import torch.nn.functional as F
+    def nonlinear_error(self, top_frac=0.2):
+            # 복잡한 transform을 제거하고 순수하게 quantile 기반 threshold를 계산합니다.
+            # transform을 해도 상위 k%의 인덱스는 변하지 않으므로 raw 값에서 구하는 것이 가장 안전합니다.
+            
+            num_gaussians = self._xyz.shape[0]
+            
+            # E_k shape: [K, 1] -> [K]
+            # densify_and_split에서 torch.norm을 쓰므로 여기서도 맞춰줍니다.
+            # (현재 E_k는 [N,1]이므로 abs()와 동일)
+            scores = torch.norm(self.E_k[:num_gaussians], dim=-1)
 
-        num_gaussians = self._xyz.shape[0]
+            # 상위 top_frac% (예: 20%)를 자르기 위한 index 계산
+            # quantile은 0~1 사이 값이므로 (1 - top_frac) 지점을 찾습니다.
+            k = int(num_gaussians * (1.0 - top_frac))
+            k = max(1, min(k, num_gaussians))
+            
+            # kthvalue는 오름차순 정렬 기준 k번째 작은 값을 반환합니다.
+            E_k_thr = torch.kthvalue(scores, k).values.item()
 
-        # E_k shape: [K] or [K,1,...] → flatten
-        E_k = self.E_k[:num_gaussians].squeeze()   # [K]
-
-        # ----------- nonlinear transforms -----------
-        if fn_type == 'f^p':
-            E_k = E_k ** p
-
-        elif fn_type == 'softplus':
-            # log(1+exp(a*x))
-            E_k = torch.log(1 + torch.exp(a * E_k))
-
-        elif fn_type == 'softmax':
-            # softmax over gaussians
-            E_k = F.softmax(E_k, dim=0)
-
-        else:
-            raise ValueError(f"Unknown fn_type: {fn_type}")
-
-        # ----------- compute top quantile threshold -----------
-        # e.g., top_frac=0.2 → 상위 20%를 의미
-        k = int(num_gaussians * (1.0 - top_frac))
-        k = max(1, min(k, num_gaussians))  # safe-guard
-
-        # kthvalue: k는 1-based index
-        E_k_thr = torch.kthvalue(E_k, k).values.item()
-
-        return E_k_thr
+            return E_k_thr
 
 
     def count_error(self, quantile_frac = 0.1, top_frac=0.2):
