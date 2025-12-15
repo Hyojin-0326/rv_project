@@ -192,64 +192,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         viewpoint_cam = viewpoint_stack.pop(rand_idx)
         vind = viewpoint_indices.pop(rand_idx)
 
-        # Render
-        if (iteration - 1) == debug_from:
-            pipe.debug = True
-
-        bg = torch.rand((3), device="cuda") if opt.random_background else background
-
-        render_pkg = render(viewpoint_cam, gaussians, pipe, bg, use_trained_exp=dataset.train_test_exp, separate_sh=SPARSE_ADAM_AVAILABLE, return_err=True)
-        image, viewspace_point_tensor, visibility_filter, radii, err_img = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"], render_pkg["err"]
-
-        if viewpoint_cam.alpha_mask is not None:
-            alpha_mask = viewpoint_cam.alpha_mask.cuda()
-            image *= alpha_mask
-
-        # -----------------------------------------------------------
-        # Loss
-        # -----------------------------------------------------------
-        gt_image = viewpoint_cam.original_image.cuda()
-        Ll1 = l1_loss(image, gt_image)
-        if FUSED_SSIM_AVAILABLE:
-            ssim_value = fused_ssim(image.unsqueeze(0), gt_image.unsqueeze(0))
-        else:
-            ssim_value = ssim(image, gt_image)
-        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_value) 
-
-        rendered_mask = (gaussians.denom > 0).squeeze(-1)
-
-        #sparsity warmup
-        target_lambda1 = 1e-4
-        warmup_start_iter = 10000
-        warmup_duration = 2000
-        if iteration< warmup_start_iter:
-            current_lambda1 = 0.0
-        elif iteration < (warmup_start_iter + warmup_duration):
-            prog = (iteration - warmup_start_iter) / warmup_duration
-            current_lambda1 = target_lambda1*prog
-        else:
-            current_lambda1 = target_lambda1
-        # L_aux 
-        alpha = 1e-6
-        per_pix_err = (image - gt_image).abs().mean(0, keepdim=True).detach()  # [1,H,W], 
-        L_aux = (per_pix_err * err_img).sum()              # 스칼라
-
-        # sparsity regularization
-        s_k = gaussians.get_s_k  # [N,1]
-        L_sp = torch.mean(s_k) 
-
-        #variance regularization
-        count = gaussians.E_k_count[rendered_mask]+1e-6
-        avg_Ek = gaussians.E_k_sum[rendered_mask]/count  # [N,1]
-        var_Ek = torch.clamp((gaussians.E_k_sq_sum[rendered_mask]/count) - (avg_Ek**2), min= 0).detach()
-        L_var = torch.mean(s_k[rendered_mask]*var_Ek)
-
-        full_var_Ek = torch.zeros((gaussians.get_xyz.shape[0],1), device="cuda")
-        full_var_Ek[rendered_mask] = var_Ek
-        
-
-        #sparcity, variance를 sum으로 바꿔보기
-
+   
 
         # Depth regularization
         Ll1depth_pure = 0.0
@@ -270,6 +213,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         loss_total.backward()
 
         # -----------------------------------------------------------
+        
         if iteration < opt.densify_until_iter:
             with torch.no_grad():
                 E_k_view = (gaussians._e_k.grad / alpha).detach().clone()  # [N,1]
@@ -340,7 +284,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                         # 하지만 학습이 여기서 끝나므로 굳이 Optimizer reset은 안 해도 저장엔 문제없음
                     else:
                         print("✨ No points to prune (all s_k >= 0.01).")
-                        
+
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
 
@@ -356,7 +300,18 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 # Case 2: E_k 저장
                 if hasattr(gaussians, 'E_k') and isinstance(gaussians.E_k, torch.Tensor):
                     save_scalar_as_npy(gaussians, save_dir, gaussians.E_k, tag="E_k")
+                # Case 3: Ek_var
+                if hasattr(gaussians, "E_k_sq_sum") and isinstance(gaussians.E_k_sq_sum, torch.Tensor):
+                    with torch.no_grad():
+                        count = gaussians.E_k_count + 1e-6
+                        
+                        mean_Ek = gaussians.E_k_sum / count
+                        mean_sq_Ek = gaussians.E_k_sq_sum / count
 
+                        E_k_var = mean_sq_Ek - (mean_Ek ** 2)
+                        E_k_var = torch.clamp(E_k_var, min=0)
+                    
+                    save_scalar_as_npy(gaussians, save_dir, E_k_var, tag="E_k_var")
 
 
             # Densification
@@ -399,7 +354,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     if allow_grow:
                         E_k_thr = gaussians.nonlinear_error()
                         print(f"Densification E_k threshold: {E_k_thr}")
-                        gaussians.densify_and_prune(E_k_thr,0.01,0.1, scene.cameras_extent, size_threshold, radii, full_var_Ek, 0.02, rule = 'both')
+                        gaussians.densify_and_prune(E_k_thr,0.005,0.1, scene.cameras_extent, size_threshold, radii, full_var_Ek, 0.02, rule = 'both')
 
                     #allow_grow를 항상 true 로 놨으니까 걍 냅둠일단
                     # else:
