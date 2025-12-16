@@ -192,6 +192,65 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         viewpoint_cam = viewpoint_stack.pop(rand_idx)
         vind = viewpoint_indices.pop(rand_idx)
 
+        # Render
+        if (iteration - 1) == debug_from:
+            pipe.debug = True
+
+        bg = torch.rand((3), device="cuda") if opt.random_background else background
+
+        render_pkg = render(viewpoint_cam, gaussians, pipe, bg, use_trained_exp=dataset.train_test_exp, separate_sh=SPARSE_ADAM_AVAILABLE, return_err=True)
+        image, viewspace_point_tensor, visibility_filter, radii, err_img = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"], render_pkg["err"]
+
+        if viewpoint_cam.alpha_mask is not None:
+            alpha_mask = viewpoint_cam.alpha_mask.cuda()
+            image *= alpha_mask
+
+        # -----------------------------------------------------------
+        # Loss
+        # -----------------------------------------------------------
+        gt_image = viewpoint_cam.original_image.cuda()
+        Ll1 = l1_loss(image, gt_image)
+        if FUSED_SSIM_AVAILABLE:
+            ssim_value = fused_ssim(image.unsqueeze(0), gt_image.unsqueeze(0))
+        else:
+            ssim_value = ssim(image, gt_image)
+        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_value) 
+
+        rendered_mask = (gaussians.denom > 0).squeeze(-1)
+
+        #sparsity warmup
+        target_lambda1 = 1e-4
+        warmup_start_iter = 10000
+        warmup_duration = 2000
+        if iteration< warmup_start_iter:
+            current_lambda1 = 0.0
+        elif iteration < (warmup_start_iter + warmup_duration):
+            prog = (iteration - warmup_start_iter) / warmup_duration
+            current_lambda1 = target_lambda1*prog
+        else:
+            current_lambda1 = target_lambda1
+        # L_aux 
+        alpha = 1e-6
+        per_pix_err = (image - gt_image).abs().mean(0, keepdim=True).detach()  # [1,H,W], 
+        L_aux = (per_pix_err * err_img).sum()              # 스칼라
+
+        # sparsity regularization
+        s_k = gaussians.get_s_k  # [N,1]
+        L_sp = torch.mean(s_k) 
+
+        #variance regularization
+        count = gaussians.E_k_count[rendered_mask]+1e-6
+        avg_Ek = gaussians.E_k_sum[rendered_mask]/count  # [N,1]
+        var_Ek = torch.clamp((gaussians.E_k_sq_sum[rendered_mask]/count) - (avg_Ek**2), min= 0)
+        var_Ek = torch.clamp((gaussians.E_k_sq_sum[rendered_mask]/count) - (avg_Ek**2), min= 0).detach()
+        L_var = torch.mean(s_k[rendered_mask]*var_Ek)
+
+        full_var_Ek = torch.zeros((gaussians.get_xyz.shape[0],1), device="cuda")
+        full_var_Ek[rendered_mask] = var_Ek
+
+
+        #sparcity, variance를 sum으로 바꿔보기
+
    
 
         # Depth regularization
