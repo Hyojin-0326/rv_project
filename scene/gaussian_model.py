@@ -571,7 +571,9 @@ class GaussianModel:
         new_scaling = self._scaling[selected_pts_mask]
         new_rotation = self._rotation[selected_pts_mask]
         new_tmp_radii = self.tmp_radii[selected_pts_mask]
-        new_s_k = self.s_k[selected_pts_mask].detach()
+        new_s_k = self.s_k[selected_pts_mask].detach().clone
+        new_s_k = self.s_k[selected_pts_mask].detach().clone()
+        new_s_k = nn.Parameter(new_s_k, requires_grad=self.train_sk)
 
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_tmp_radii, new_s_k)
 
@@ -684,5 +686,4 @@ class GaussianModel:
         return E_k_thr
 
         #일단 train 로직에 병합하지는 않았음. nonlinear error만 실험중... 
-
 

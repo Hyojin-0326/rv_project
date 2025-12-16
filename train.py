@@ -220,7 +220,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         #sparsity warmup
         target_lambda1 = 1e-4
-        warmup_start_iter = 10000
+        warmup_start_iter = 15000
         warmup_duration = 2000
         if iteration< warmup_start_iter:
             current_lambda1 = 0.0
@@ -373,7 +373,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 # if hassattr(opt, "max_points"):
                 #     allow_grow = (cur_N+allow_growth) < opt.max_points if hasattr(opt, "max_points")
                 # else:
-                #     allow_grow = (cur_N+allow_growth) < 
+                #     allow_grow = (cur_N+allow_growth) < x
 
 
                 # 일단 무조건 grow 허용... 사실  gt가 있는 거 아니면 max N 을 모르니까 결과가 안나와서
