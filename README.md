@@ -101,6 +101,38 @@ All experiments follow the same training protocol as the baseline unless otherwi
 
 ---
 
+## Quantitative Results
+
+We report quantitative comparisons on **Bicycle**, **Garden**, and **Flowers** datasets using PSNR, SSIM, LPIPS, and model size.
+
+### Bicycle Dataset
+
+| Method                        | SSIM ↑     | PSNR ↑    | LPIPS ↓    | Model Size |
+| ----------------------------- | ---------- | --------- | ---------- | ---------- |
+| Original 3DGS                 | 0.8616     | 27.92     | 0.1640     | 1.1 GB     |
+| No Tag                        | 0.8468     | 27.19     | 0.1733     | 580 MB     |
+| Tag (300)                     | 0.8398     | 27.04     | 0.1818     | 511 MB     |
+| Tag (300 → 25k)               | 0.8380     | 27.08     | 0.1847     | 490 MB     |
+| **Tag + GradPrune**           | **0.8618** | **27.56** | **0.1552** | **800 MB** |
+| Tag + GradPrune (Decomp. 0.1) | 0.8573     | 27.43     | 0.1573     | **195 MB** |
+| Tag + GradPrune (Decomp. 0.3) | 0.8573     | 27.43     | 0.1574     | **195 MB** |
+
+### Garden Dataset
+
+| Method                        | SSIM ↑     | PSNR ↑ | LPIPS ↓    | Model Size |
+| ----------------------------- | ---------- | ------ | ---------- | ---------- |
+| Original 3DGS                 | 0.9115     | 29.70  | 0.0868     | 1.0 GB     |
+| **Tag + GradPrune**           | **0.9131** | 29.68  | **0.0801** | 800 MB     |
+| Tag + GradPrune (Decomp. 0.1) | 0.9072     | 29.35  | 0.0843     | **200 MB** |
+
+### Flowers Dataset
+
+| Method                    | SSIM ↑     | PSNR ↑    | LPIPS ↓    | Model Size |
+| ------------------------- | ---------- | --------- | ---------- | ---------- |
+| Original 3DGS             | 0.6962     | 23.58     | 0.2970     | 710 MB     |
+| **Tag + GradPrune**       | **0.8156** | **25.08** | **0.1950** | 780 MB     |
+| Tag + GradPrune (Decomp.) | 0.8068     | 24.90     | 0.1986     | **189 MB** |
+
 ## Results Highlights
 
 * Improved preservation of **fine details and thin structures**
