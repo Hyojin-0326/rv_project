@@ -34,7 +34,7 @@ These components work together to allocate model capacity where it matters most,
 ---
 
 ## Results
-<img width="789" height="259" alt="image" src="https://github.com/user-attachments/assets/98729cdb-d3c2-4f2b-a51a-efe104e6e18f" />
+<img width="466" height="618" alt="image" src="https://github.com/user-attachments/assets/2e19c5bf-96ed-4dfa-a21a-d7efdbc03e4c" />
 <img width="473" height="628" alt="image" src="https://github.com/user-attachments/assets/60f201cd-9850-40b3-8388-a31b67b64e24" />
 <img width="469" height="632" alt="image" src="https://github.com/user-attachments/assets/adeb99bc-b0a6-4ecc-8e5e-1750cfd8748d" />
 
