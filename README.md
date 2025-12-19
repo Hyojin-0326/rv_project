@@ -4,6 +4,14 @@ This repository contains the official implementation of **Error-Driven Importanc
 
 The goal of this project is to **preserve fine geometric and appearance details while reducing unnecessary memory usage**, addressing key limitations of heuristic-based densification and opacity-driven pruning in the original 3DGS pipeline.
 
+
+---
+
+## Results
+<img width="466" height="618" alt="image" src="https://github.com/user-attachments/assets/2e19c5bf-96ed-4dfa-a21a-d7efdbc03e4c" />
+<img width="473" height="628" alt="image" src="https://github.com/user-attachments/assets/60f201cd-9850-40b3-8388-a31b67b64e24" />
+<img width="469" height="632" alt="image" src="https://github.com/user-attachments/assets/adeb99bc-b0a6-4ecc-8e5e-1750cfd8748d" />
+
 ---
 
 ## Overview
@@ -30,15 +38,6 @@ These components work together to allocate model capacity where it matters most,
 * **Gaussian tagging** to avoid underdensification caused by aggressive early pruning
 * **MLP-based importance modeling** that decouples pruning decisions from opacity
 * **Importance-modulated rendering** that suppresses noise while preserving thin or semi-transparent structures
-
----
-
-## Results
-<img width="466" height="618" alt="image" src="https://github.com/user-attachments/assets/2e19c5bf-96ed-4dfa-a21a-d7efdbc03e4c" />
-<img width="473" height="628" alt="image" src="https://github.com/user-attachments/assets/60f201cd-9850-40b3-8388-a31b67b64e24" />
-<img width="469" height="632" alt="image" src="https://github.com/user-attachments/assets/adeb99bc-b0a6-4ecc-8e5e-1750cfd8748d" />
-
-
 
 ---
 
